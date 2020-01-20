@@ -28,6 +28,12 @@ The chaincode package should be used to provide two pieces of information to the
 * provide chaincode endpoint information in a `connection.json` file placed in the release directory. The `bin/run` section describes the `connection.json` file
 
 There is plenty of flexibility to gathering the above information. The sample scripts in the [External builder and launcher sample scripts](#external-builder-and-launcher-sample-scripts) illustrate a simple approach to providing the information.
+As an example of flexibility, consider packaging couchdb index files (see [Add the index to your chaincode folder](https://hyperledger-fabric.readthedocs.io/en/release-1.4/couchdb_tutorial.html#add-the-index-to-your-chaincode-folder)). Sample scripts below describe an approach to packaging the files into code.tar.gz.
+
+```
+tar cfz code.tar.gz connection.json metadata
+tar cfz $1-pkg.tgz metadata.json code.tar.gz
+```
 
 ## Configuring a peer to process external chaincode
 
@@ -112,13 +118,17 @@ SOURCE=$1
 OUTPUT=$3
 
 #external chaincodes expect connection.json file in the chaincode package
-if [ ! -f "$SOURCE/connection.json" ]  ; then
+if [ ! -f "$SOURCE/connection.json" ]; then
     >&2 echo "$SOURCE/connection.json not found"
     exit 1
 fi
 
 #simply copy the endpoint information to specified output location
 cp $SOURCE/connection.json $OUTPUT/connection.json
+
+if [ -d "$SOURCE/metadata" ]; then
+    cp -a $SOURCE/metadata $OUTPUT/metadata
+fi
 
 exit 0
 
@@ -169,6 +179,10 @@ set -euo pipefail
 
 BLD="$1"
 RELEASE="$2"
+
+if [ -d "$BLD/metadata" ]; then
+   cp -a "$BLD/metadata/"* "$RELEASE/"
+fi
 
 #external chaincodes expect artifacts to be placed under "$RELEASE"/chaincode/server
 if [ -f $BLD/connection.json ]; then
