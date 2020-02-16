@@ -330,6 +330,17 @@ func (c *Cache) StateCommitDone(channelName string) {
 // ChaincodeInfo returns the chaincode definition and its install info.
 // An error is returned only if either the channel or the chaincode do not exist.
 func (c *Cache) ChaincodeInfo(channelID, name string) (*LocalChaincodeInfo, error) {
+	if name == LifecycleNamespace {
+		ac, ok := c.Resources.ChannelConfigSource.GetStableChannelConfig(channelID).ApplicationConfig()
+		if !ok {
+			return nil, errors.Errorf("application config does not exist for channel '%s'", channelID)
+		}
+		if !ac.Capabilities().LifecycleV20() {
+			return nil, errors.Errorf("cannot use _lifecycle without V2_0 application capabilities enabled for channel '%s'", channelID)
+		}
+		return c.getLifecycleSCCChaincodeInfo(channelID)
+	}
+
 	c.mutex.RLock()
 	defer c.mutex.RUnlock()
 	channelChaincodes, ok := c.definedChaincodes[channelID]
@@ -346,6 +357,24 @@ func (c *Cache) ChaincodeInfo(channelID, name string) (*LocalChaincodeInfo, erro
 		Definition:  cachedChaincode.Definition,
 		InstallInfo: cachedChaincode.InstallInfo,
 		Approved:    cachedChaincode.Approved,
+	}, nil
+}
+
+func (c *Cache) getLifecycleSCCChaincodeInfo(channelID string) (*LocalChaincodeInfo, error) {
+	policyBytes, err := c.Resources.LifecycleEndorsementPolicyAsBytes(channelID)
+	if err != nil {
+		return nil, err
+	}
+
+	return &LocalChaincodeInfo{
+		Definition: &ChaincodeDefinition{
+			ValidationInfo: &lb.ChaincodeValidationInfo{
+				ValidationParameter: policyBytes,
+			},
+			Sequence: 1,
+		},
+		Approved:    true,
+		InstallInfo: &ChaincodeInstallInfo{},
 	}, nil
 }
 
@@ -450,9 +479,9 @@ func (c *Cache) update(initializing bool, channelID string, dirtyChaincodes map[
 		}
 
 		if !initializing {
-			// check for existing local chaincodes that reference this chaincode name on this channel
+			// check for existing local chaincodes that reference this chaincode
+			// name on this channel
 			for _, lc := range c.localChaincodes {
-				// track which channel, if any, we removed a local chaincode reference from
 				if ref, ok := lc.References[channelID][name]; ok {
 					if ref.InstallInfo == nil || localChaincode.Info == nil {
 						continue
@@ -461,16 +490,26 @@ func (c *Cache) update(initializing bool, channelID string, dirtyChaincodes map[
 						continue
 					}
 
-					// remove existing local chaincode reference, which referred to an old chaincode definition
+					// remove existing local chaincode reference, which referred to a
+					// previous chaincode definition
 					delete(lc.References[channelID], name)
 					if len(lc.References[channelID]) == 0 {
 						delete(lc.References, channelID)
 
-						// TODO FAB-17046: finally, check to see if this chaincode is
-						// referenced in any channel. if not, stop the chaincode here
-						// if len(lc.References) == 0 {
-						// 	logger.Debug("chaincode package with label %s is no longer referenced and will be stopped", localChaincode.Info.Label)
-						// }
+						// check to see if this "local" chaincode is installed (an entry
+						// is added into local chaincodes for active chaincode definition
+						// references regardless of whether the peer has a chaincode
+						// package installed)
+						if lc.Info == nil {
+							continue
+						}
+
+						// finally, check to see if this chaincode is referenced in any
+						// channel. if not, stop the chaincode here
+						if len(lc.References) == 0 {
+							logger.Debugf("chaincode package with label %s is no longer referenced and will be stopped", lc.Info.Label)
+							c.chaincodeCustodian.NotifyStoppable(lc.Info.PackageID)
+						}
 					}
 				}
 			}
@@ -589,6 +628,24 @@ func (c *Cache) retrieveChaincodesMetadataSetWhileLocked(channelID string) (chai
 			},
 		)
 	}
+
+	// get the chaincode info for _lifecycle
+	lc, err := c.getLifecycleSCCChaincodeInfo(channelID)
+	if err != nil {
+		return nil, err
+	}
+
+	// add it to the metadataset so _lifecycle can also be queried
+	// via service discovery
+	metadataSet = append(metadataSet,
+		chaincode.Metadata{
+			Name:      LifecycleNamespace,
+			Version:   strconv.FormatInt(lc.Definition.Sequence, 10),
+			Policy:    lc.Definition.ValidationInfo.ValidationParameter,
+			Approved:  lc.Approved,
+			Installed: lc.InstallInfo != nil,
+		},
+	)
 
 	return metadataSet, nil
 }

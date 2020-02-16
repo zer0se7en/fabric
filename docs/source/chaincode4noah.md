@@ -63,8 +63,6 @@ This tutorial provides a detailed overview of the operations of the Fabric
 chaincode lifecycle rather than the specific commands. To learn more about how
 to use the Fabric lifecycle using the Peer CLI, see [Install and define a chaincode](build_network.html#install-define-chaincode)
 in the Building your First Network Tutorial or the [peer lifecycle command reference](commands/peerlifecycle.html).
-To learn more about how to use the Fabric lifecycle using the Fabric SDK for
-Node.js, visit [How to install and start your chaincode](https://hyperledger.github.io/fabric-sdk-node/master/tutorial-chaincode-lifecycle.html).
 
 ### Step One: Packaging the smart contract
 
@@ -80,13 +78,12 @@ automatically create a file in this format.
 - The chaincode needs to be packaged in a tar file, ending with a `.tar.gz` file
   extension.
 - The tar file needs to contain two files (no directory): a metadata file
-  "Chaincode-Package-Metadata.json" and another tar containing the chaincode
-  files.
-- "Chaincode-Package-Metadata.json" contains JSON that specifies the
-  chaincode language, code path, and package label.
-  You can see an example of a metadata file below:
+  "metadata.json" and another tar containing the chaincode files.
+- "metadata.json" contains JSON that specifies the
+  chaincode language, code path, and package label. You can see an example of
+  a metadata file below:
   ```
-  {"Path":"github.com/chaincode/fabcar/go","Type":"golang","Label":"fabcarv1"}
+  {"Path":"fabric-samples/chaincode/fabcar/go","Type":"golang","Label":"fabcarv1"}
   ```
 
 ![Packaging the chaincode](lifecycle/Lifecycle-package.png)
@@ -147,7 +144,7 @@ consistent across organizations:
   endorse a transaction.
 - **Collection Configuration:** The path to a private data collection definition
   file associated with your chaincode. For more information about private data
-  collections, see the [Private Data architecture reference](https://hyperledger-fabric.readthedocs.io/en/master/private-data-arch.html).
+  collections, see the [Private Data architecture reference](https://hyperledger-fabric.readthedocs.io/en/{BRANCH}/private-data-arch.html).
 - **Initialization:** All chaincode need to contain an ``Init`` function that is
   used to initialize the chaincode. By default, this function is never executed.
   However, you can use the chaincode definition to request that the ``Init``
@@ -202,7 +199,8 @@ policy. For example, even if a chaincode endorsement policy only requires
 signatures from one or two organizations, a majority of channel members still
 need to approve the chaincode definition according to the default policy. When
 committing a channel definition, you need to target enough peer organizations in
-the channel to satisfy your LifecycleEndorsement policy.
+the channel to satisfy your LifecycleEndorsement policy. You can learn more
+about the Fabric chaincode lifecycle policies in the [Policies concept topic](policies/policies.html).
 
 You can also set the ``Channel/Application/LifecycleEndorsement`` policy to be a
 signature policy and explicitly specify the set of organizations on the channel
@@ -415,7 +413,7 @@ defining it on a channel in production.
 
   ![Using different chaincode languages](lifecycle/Lifecycle-languages.png)
 
-*Org1 installs a package of the MYCC chaincode written in Golang, while Org2
+*Org1 installs a package of the MYCC chaincode written in Go, while Org2
 installs MYCC written in Java.*
 
 Organizations can also use this capability to install smart contracts that

@@ -244,7 +244,7 @@ The `deployCC` subcommand will install the **fabcar** chaincode on
 the chaincode on the channel specified using the channel flag (or `mychannel`
 if no channel is specified). If are deploying a chaincode for the first time, the
 script will install the chaincode dependencies. By default, The script installs
-the Golang version of the fabcar chaincode. However, you can use the language
+the Go version of the fabcar chaincode. However, you can use the language
 flag, `-l`, to install the Java or javascript versions of the chaincode.
 
 After the **fabcar** chaincode definition has been committed to the channel, the
@@ -318,7 +318,7 @@ If the command is successful, you should see the following response:
 
 Because the endorsement policy for the fabcar chaincode requires the transaction
 to be signed by Org1 and Org2, the chaincode invoke command needs to target both
-`peer0.org1.example.com` and `peer0.org1.example.com` using the `--peerAddresses`
+`peer0.org1.example.com` and `peer0.org2.example.com` using the `--peerAddresses`
 flag. Because TLS is enabled for the network, the command also needs to reference
 the TLS certificate for each peer using the `--tlsRootCertFiles` flag.
 
