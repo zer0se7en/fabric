@@ -23,14 +23,6 @@ documentation.
 .. note:: If you're on Windows please see the specific note on `Windows
    extras`_ below.
 
-Install wget
-------------
-
-If you will be downloading Fabric binaries based on the :doc:`install` documentation,
-you will need ``wget`` installed.
-
-  - MacOSX does not include ``wget`` by default, you can install it using ``brew install wget``.
-
 Docker and Docker Compose
 -------------------------
 
@@ -91,7 +83,7 @@ Go Programming Language
 Hyperledger Fabric uses the Go Programming Language for many of its
 components.
 
-  - `Go <https://golang.org/dl/>`__ version 1.13.x is required.
+  - `Go <https://golang.org/dl/>`__ version 1.14.x is required.
 
 Given that we will be writing chaincode programs in Go, there are two
 environment variables you will need to set properly; you can make these

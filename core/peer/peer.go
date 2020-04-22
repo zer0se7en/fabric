@@ -21,7 +21,6 @@ import (
 	commonledger "github.com/hyperledger/fabric/common/ledger"
 	"github.com/hyperledger/fabric/common/policies"
 	"github.com/hyperledger/fabric/common/semaphore"
-	"github.com/hyperledger/fabric/core/comm"
 	"github.com/hyperledger/fabric/core/committer"
 	"github.com/hyperledger/fabric/core/committer/txvalidator"
 	"github.com/hyperledger/fabric/core/committer/txvalidator/plugin"
@@ -37,6 +36,7 @@ import (
 	"github.com/hyperledger/fabric/gossip/api"
 	gossipprivdata "github.com/hyperledger/fabric/gossip/privdata"
 	gossipservice "github.com/hyperledger/fabric/gossip/service"
+	"github.com/hyperledger/fabric/internal/pkg/comm"
 	"github.com/hyperledger/fabric/internal/pkg/peer/orderers"
 	"github.com/hyperledger/fabric/msp"
 	mspmgmt "github.com/hyperledger/fabric/msp/mgmt"
@@ -216,7 +216,7 @@ func (p *Peer) CreateChannel(
 		return errors.WithMessage(err, "cannot create ledger from genesis block")
 	}
 
-	if err := p.createChannel(cid, l, cb, p.pluginMapper, deployedCCInfoProvider, legacyLifecycleValidation, newLifecycleValidation); err != nil {
+	if err := p.createChannel(cid, l, deployedCCInfoProvider, legacyLifecycleValidation, newLifecycleValidation); err != nil {
 		return err
 	}
 
@@ -238,8 +238,6 @@ func retrievePersistedChannelConfig(ledger ledger.PeerLedger) (*common.Config, e
 func (p *Peer) createChannel(
 	cid string,
 	l ledger.PeerLedger,
-	cb *common.Block,
-	pluginMapper plugin.Mapper,
 	deployedCCInfoProvider ledger.DeployedChaincodeInfoProvider,
 	legacyLifecycleValidation plugindispatcher.LifecycleResources,
 	newLifecycleValidation plugindispatcher.CollectionAndLifecycleResources,
@@ -511,14 +509,8 @@ func (p *Peer) Initialize(
 			peerLogger.Debugf("Error while loading ledger %s with message %s. We continue to the next ledger rather than abort.", cid, err)
 			continue
 		}
-		cb, err := ConfigBlockFromLedger(ledger)
-		if err != nil {
-			peerLogger.Errorf("Failed to find config block on ledger %s(%s)", cid, err)
-			peerLogger.Debugf("Error while looking for config block on ledger %s with message %s. We continue to the next ledger rather than abort.", cid, err)
-			continue
-		}
 		// Create a chain if we get a valid ledger with config block
-		err = p.createChannel(cid, ledger, cb, pm, deployedCCInfoProvider, legacyLifecycleValidation, newLifecycleValidation)
+		err = p.createChannel(cid, ledger, deployedCCInfoProvider, legacyLifecycleValidation, newLifecycleValidation)
 		if err != nil {
 			peerLogger.Errorf("Failed to load chain %s(%s)", cid, err)
 			peerLogger.Debugf("Error reloading chain %s with message %s. We continue to the next chain rather than abort.", cid, err)
