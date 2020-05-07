@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/golang/protobuf/proto"
 	cb "github.com/hyperledger/fabric-protos-go/common"
 	"github.com/hyperledger/fabric/common/tools/protolator"
 	"github.com/hyperledger/fabric/common/tools/protolator/protoext/commonext"
@@ -331,7 +332,7 @@ func TestNewConsortiumsGroupFailure(t *testing.T) {
 	gt.Expect(consortiumsGroup).To(BeNil())
 }
 
-func TestAddOrgToConsortium(t *testing.T) {
+func TestSetConsortiumOrg(t *testing.T) {
 	t.Parallel()
 
 	gt := NewGomegaWithT(t)
@@ -353,10 +354,7 @@ func TestAddOrgToConsortium(t *testing.T) {
 		},
 	}
 
-	c := ConfigTx{
-		original: config,
-		updated:  config,
-	}
+	c := New(config)
 
 	orgToAdd := Organization{
 		Name:     "Org3",
@@ -780,13 +778,13 @@ func TestAddOrgToConsortium(t *testing.T) {
 	err = protolator.DeepUnmarshalJSON(bytes.NewBufferString(expectedConfigJSON), expectedConfigProto)
 	gt.Expect(err).NotTo(HaveOccurred())
 
-	err = c.AddOrgToConsortium(orgToAdd, "Consortium1")
+	err = c.SetConsortiumOrg(orgToAdd, "Consortium1")
 	gt.Expect(err).NotTo(HaveOccurred())
 
-	gt.Expect(config).To(Equal(expectedConfigProto))
+	gt.Expect(proto.Equal(c.UpdatedConfig(), expectedConfigProto)).To(BeTrue())
 }
 
-func TestAddOrgToConsortiumFailures(t *testing.T) {
+func TestSetConsortiumOrgFailures(t *testing.T) {
 	t.Parallel()
 
 	orgToAdd := Organization{
@@ -807,29 +805,6 @@ func TestAddOrgToConsortiumFailures(t *testing.T) {
 			consortium:  "",
 			expectedErr: "consortium is required",
 		},
-		{
-			name:        "When the config doesn't contain the consortium",
-			org:         orgToAdd,
-			consortium:  "what-the-what",
-			expectedErr: "consortium 'what-the-what' does not exist",
-		},
-		{
-			name: "When the config doesn't contain the consortium",
-			org: Organization{
-				Name:     "test-msp",
-				Policies: map[string]Policy{},
-			},
-			consortium:  "Consortium1",
-			expectedErr: "failed to create consortium org: no Admins policy defined",
-		},
-		{
-			name: "When the consortium already contains the org",
-			org: Organization{
-				Name: "Org1",
-			},
-			consortium:  "Consortium1",
-			expectedErr: "org 'Org1' already defined in consortium 'Consortium1'",
-		},
 	} {
 		test := test
 		t.Run(test.name, func(t *testing.T) {
@@ -849,12 +824,9 @@ func TestAddOrgToConsortiumFailures(t *testing.T) {
 				},
 			}
 
-			c := ConfigTx{
-				original: config,
-				updated:  config,
-			}
+			c := New(config)
 
-			err = c.AddOrgToConsortium(test.org, test.consortium)
+			err = c.SetConsortiumOrg(test.org, test.consortium)
 			gt.Expect(err).To(MatchError(test.expectedErr))
 		})
 	}
@@ -879,14 +851,11 @@ func TestRemoveConsortium(t *testing.T) {
 		},
 	}
 
-	c := ConfigTx{
-		original: config,
-		updated:  config,
-	}
+	c := New(config)
 
 	c.RemoveConsortium("Consortium1")
 
-	updatedConsortiumsGroup := c.updated.ChannelGroup.Groups[ConsortiumsGroupKey]
+	updatedConsortiumsGroup := c.UpdatedConfig().ChannelGroup.Groups[ConsortiumsGroupKey]
 	gt.Expect(updatedConsortiumsGroup.Groups["Consortium1"]).To(BeNil())
 }
 
@@ -916,6 +885,21 @@ func TestGetConsortiums(t *testing.T) {
 	gt.Expect(len(baseConsortiums)).To(Equal(len(consortiums)))
 }
 
+func TestGetConsortiumOrg(t *testing.T) {
+	t.Parallel()
+	gt := NewGomegaWithT(t)
+
+	consortiumGroup, err := baseConsortiumChannelGroup(t)
+	gt.Expect(err).NotTo(HaveOccurred())
+
+	config := &cb.Config{
+		ChannelGroup: consortiumGroup,
+	}
+
+	org1ConfigGroup := getConsortiumOrg(config, "Consortium1", "Org1")
+	gt.Expect(org1ConfigGroup).To(Equal(config.ChannelGroup.Groups[ConsortiumsGroupKey].Groups["Consortium1"].Groups["Org1"]))
+}
+
 func baseConsortiums(t *testing.T) []Consortium {
 	return []Consortium{
 		{
@@ -934,4 +918,18 @@ func baseConsortiums(t *testing.T) []Consortium {
 			},
 		},
 	}
+}
+
+func baseConsortiumChannelGroup(t *testing.T) (*cb.ConfigGroup, error) {
+	channelGroup := newConfigGroup()
+
+	consortiums := baseConsortiums(t)
+	consortiumsGroup, err := newConsortiumsGroup(consortiums)
+	if err != nil {
+		return nil, err
+	}
+
+	channelGroup.Groups[ConsortiumsGroupKey] = consortiumsGroup
+
+	return channelGroup, nil
 }

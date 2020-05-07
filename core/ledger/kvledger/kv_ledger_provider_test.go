@@ -19,9 +19,10 @@ import (
 	"github.com/hyperledger/fabric-protos-go/peer"
 	"github.com/hyperledger/fabric/bccsp/sw"
 	configtxtest "github.com/hyperledger/fabric/common/configtx/test"
-	"github.com/hyperledger/fabric/common/ledger/blkstorage/fsblkstorage"
+	"github.com/hyperledger/fabric/common/ledger/blkstorage"
 	"github.com/hyperledger/fabric/common/ledger/dataformat"
 	"github.com/hyperledger/fabric/common/ledger/testutil"
+	"github.com/hyperledger/fabric/common/ledger/util/leveldbhelper"
 	"github.com/hyperledger/fabric/common/metrics/disabled"
 	"github.com/hyperledger/fabric/common/util"
 	"github.com/hyperledger/fabric/core/ledger"
@@ -55,7 +56,7 @@ func TestLedgerProvider(t *testing.T) {
 	s := provider.idStore
 	val, err := s.db.Get(formatKey)
 	require.NoError(t, err)
-	require.Equal(t, []byte(dataformat.Version20), val)
+	require.Equal(t, []byte(dataformat.CurrentFormat), val)
 
 	provider.Close()
 
@@ -164,7 +165,79 @@ func TestUpgradeIDStoreFormatDBError(t *testing.T) {
 	provider.Close()
 
 	err := provider.idStore.upgradeFormat()
-	require.EqualError(t, err, "error retrieving leveldb key [[]byte{0x66}]: leveldb: closed")
+	dbPath := LedgerProviderPath(conf.RootFSPath)
+	require.EqualError(t, err, fmt.Sprintf("error while trying to see if the leveldb at path [%s] is empty: leveldb: closed", dbPath))
+}
+
+func TestCheckUpgradeEligibilityV1x(t *testing.T) {
+	conf, cleanup := testConfig(t)
+	defer cleanup()
+	dbPath := LedgerProviderPath(conf.RootFSPath)
+	db := leveldbhelper.CreateDB(&leveldbhelper.Conf{DBPath: dbPath})
+	idStore := &idStore{db, dbPath}
+	db.Open()
+	defer db.Close()
+
+	// write a tmpKey so that idStore is not be empty
+	err := idStore.db.Put([]byte("tmpKey"), []byte("tmpValue"), true)
+	require.NoError(t, err)
+
+	eligible, err := idStore.checkUpgradeEligibility()
+	require.NoError(t, err)
+	require.True(t, eligible)
+}
+
+func TestCheckUpgradeEligibilityCurrentVersion(t *testing.T) {
+	conf, cleanup := testConfig(t)
+	defer cleanup()
+	dbPath := LedgerProviderPath(conf.RootFSPath)
+	db := leveldbhelper.CreateDB(&leveldbhelper.Conf{DBPath: dbPath})
+	idStore := &idStore{db, dbPath}
+	db.Open()
+	defer db.Close()
+
+	err := idStore.db.Put(formatKey, []byte(dataformat.CurrentFormat), true)
+	require.NoError(t, err)
+
+	eligible, err := idStore.checkUpgradeEligibility()
+	require.NoError(t, err)
+	require.False(t, eligible)
+}
+
+func TestCheckUpgradeEligibilityBadFormat(t *testing.T) {
+	conf, cleanup := testConfig(t)
+	defer cleanup()
+	dbPath := LedgerProviderPath(conf.RootFSPath)
+	db := leveldbhelper.CreateDB(&leveldbhelper.Conf{DBPath: dbPath})
+	idStore := &idStore{db, dbPath}
+	db.Open()
+	defer db.Close()
+
+	err := idStore.db.Put(formatKey, []byte("x.0"), true)
+	require.NoError(t, err)
+
+	expectedErr := &dataformat.ErrFormatMismatch{
+		ExpectedFormat: dataformat.PreviousFormat,
+		Format:         "x.0",
+		DBInfo:         fmt.Sprintf("leveldb for channel-IDs at [%s]", LedgerProviderPath(conf.RootFSPath)),
+	}
+	eligible, err := idStore.checkUpgradeEligibility()
+	require.EqualError(t, err, expectedErr.Error())
+	require.False(t, eligible)
+}
+
+func TestCheckUpgradeEligibilityEmptyDB(t *testing.T) {
+	conf, cleanup := testConfig(t)
+	defer cleanup()
+	dbPath := LedgerProviderPath(conf.RootFSPath)
+	db := leveldbhelper.CreateDB(&leveldbhelper.Conf{DBPath: dbPath})
+	idStore := &idStore{db, dbPath}
+	db.Open()
+	defer db.Close()
+
+	eligible, err := idStore.checkUpgradeEligibility()
+	require.NoError(t, err)
+	require.False(t, eligible)
 }
 
 func TestLedgerProviderHistoryDBDisabled(t *testing.T) {
@@ -416,7 +489,7 @@ func TestLedgerBackup(t *testing.T) {
 	// and rename the originalPath to restorePath
 	assert.NoError(t, os.RemoveAll(StateDBPath(originalPath)))
 	assert.NoError(t, os.RemoveAll(HistoryDBPath(originalPath)))
-	assert.NoError(t, os.RemoveAll(filepath.Join(BlockStorePath(originalPath), fsblkstorage.IndexDir)))
+	assert.NoError(t, os.RemoveAll(filepath.Join(BlockStorePath(originalPath), blkstorage.IndexDir)))
 	assert.NoError(t, os.Rename(originalPath, restorePath))
 
 	// Instantiate the ledger from restore environment and this should behave exactly as it would have in the original environment

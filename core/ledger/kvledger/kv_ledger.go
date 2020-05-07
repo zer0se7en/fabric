@@ -40,8 +40,8 @@ var logger = flogging.MustGetLogger("kvledger")
 // This implementation provides a key-value based data model
 type kvLedger struct {
 	ledgerID               string
-	blockStore             blkstorage.BlockStore
-	pvtdataStore           pvtdatastorage.Store
+	blockStore             *blkstorage.BlockStore
+	pvtdataStore           *pvtdatastorage.Store
 	txtmgmt                txmgr.TxMgr
 	historyDB              *history.DB
 	configHistoryRetriever ledger.ConfigHistoryRetriever
@@ -56,8 +56,8 @@ type kvLedger struct {
 
 func newKVLedger(
 	ledgerID string,
-	blockStore blkstorage.BlockStore,
-	pvtdataStore pvtdatastorage.Store,
+	blockStore *blkstorage.BlockStore,
+	pvtdataStore *pvtdatastorage.Store,
 	versionedDB privacyenabledstate.DB,
 	historyDB *history.DB,
 	configHistoryMgr confighistory.Mgr,
@@ -767,7 +767,7 @@ func (a *ccEventListenerAdaptor) ChaincodeDeployDone(succeeded bool) {
 	a.legacyEventListener.ChaincodeDeployDone(succeeded)
 }
 
-func filterPvtDataOfInvalidTx(hashVerifiedPvtData map[uint64][]*ledger.TxPvtData, blockStore blkstorage.BlockStore) (map[uint64][]*ledger.TxPvtData, error) {
+func filterPvtDataOfInvalidTx(hashVerifiedPvtData map[uint64][]*ledger.TxPvtData, blockStore *blkstorage.BlockStore) (map[uint64][]*ledger.TxPvtData, error) {
 	committedPvtData := make(map[uint64][]*ledger.TxPvtData)
 	for blkNum, txsPvtData := range hashVerifiedPvtData {
 

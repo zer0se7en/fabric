@@ -115,7 +115,8 @@ func (env *testCouchDBEnv) stopCouchDB() {
 }
 
 func (env *testCouchDBEnv) cleanup(config *ledger.CouchDBConfig) {
-	DeleteApplicationDBs(env.t, config)
+	err := DropApplicationDBs(config)
+	require.NoError(env.t, err)
 }
 
 // we create two CouchDB instances/containers---one is used to test the
@@ -705,7 +706,7 @@ func TestTryCastingToJSON(t *testing.T) {
 	assert.False(t, isJSON)
 }
 
-func TestHandleChaincodeDeployErroneousIndexFile(t *testing.T) {
+func TestIndexDeploymentWithOrderAndBadSyntax(t *testing.T) {
 	channelName := "ch1"
 	vdbEnv.init(t, nil)
 	defer vdbEnv.cleanup()
@@ -723,19 +724,23 @@ func TestHandleChaincodeDeployErroneousIndexFile(t *testing.T) {
 		t.Fatalf("Couchdb state impl is expected to implement interface `statedb.IndexCapable`")
 	}
 
+	badSyntaxFileContent := `{"index":{"fields": This is a bad json}`
 	indexData := map[string][]byte{
-		"META-INF/statedb/couchdb/indexes/indexSizeSortName.json": []byte(`{"index":{"fields":[{"size":"desc"}]},"ddoc":"indexSizeSortName","name":"indexSizeSortName","type":"json"}`),
+		"META-INF/statedb/couchdb/indexes/indexColorSortName.json":                             []byte(`{"index":{"fields":[{"color":"desc"}]},"ddoc":"indexSizeSortName","name":"indexSizeSortName","type":"json"}`),
+		"META-INF/statedb/couchdb/indexes/indexSizeSortName.json":                              []byte(`{"index":{"fields":[{"size":"desc"}]},"ddoc":"indexSizeSortName","name":"indexSizeSortName","type":"json"}`),
+		"META-INF/statedb/couchdb/indexes/badSyntax.json":                                      []byte(badSyntaxFileContent),
+		"META-INF/statedb/couchdb/collections/collectionMarbles/indexes/indexCollMarbles.json": []byte(`{"index":{"fields":["docType","owner"]},"ddoc":"indexCollectionMarbles", "name":"indexCollectionMarbles","type":"json"}`),
 	}
 
+	// as the indexes are sorted by file names, the order of index processing would be
+	// (1) indexCollMarbles.json, (2) badSyntax.json, (3) indexColorSortName, (4) indexSizeSortName.
+	// As the indexColorSortName.json and indexSizeSortName has the same index name but different
+	// index fields, the later would replace the former, i.e., index would be created on size field
+	// rather than the color field. Further, the index with a bad syntax would not stop the processing
+	// of other valid indexes.
 	assert.NoError(t, indexCapable.ProcessIndexesForChaincodeDeploy("ns1", indexData))
 
-	badSyntaxFileContent := `{"index":{"fields": This is a bad json}`
-	indexData = map[string][]byte{
-		"META-INF/statedb/couchdb/indexes/badSyntax.json": []byte(badSyntaxFileContent),
-	}
-	assert.Error(t, indexCapable.ProcessIndexesForChaincodeDeploy("ns1", indexData))
-
-	queryString := `{"selector":{"owner":"fred"}, "sort": [{"size": "desc"}]}`
+	queryString := `{"selector":{"owner":"fred"}, "sort": [{"docType": "desc"}]}`
 	queryUsingIndex := func() bool {
 		_, err = db.ExecuteQuery("ns1", queryString)
 		if err != nil {
@@ -744,6 +749,29 @@ func TestHandleChaincodeDeployErroneousIndexFile(t *testing.T) {
 		return true
 	}
 	assert.Eventually(t, queryUsingIndex, 2*time.Second, 100*time.Millisecond, "error executing query with sort")
+
+	queryString = `{"selector":{"owner":"fred"}, "sort": [{"size": "desc"}]}`
+	queryUsingIndex = func() bool {
+		_, err = db.ExecuteQuery("ns1", queryString)
+		if err != nil {
+			return false
+		}
+		return true
+	}
+	assert.Eventually(t, queryUsingIndex, 2*time.Second, 100*time.Millisecond, "error executing query with sort")
+
+	// though the indexColorSortName.json is processed before indexSizeSortName.json as per the order,
+	// the later would replace the former as the index names are the same. Hence, a query using the color
+	// field in sort should fail.
+	queryString = `{"selector":{"owner":"fred"}, "sort": [{"color": "desc"}]}`
+	queryUsingIndex = func() bool {
+		_, err = db.ExecuteQuery("ns1", queryString)
+		if err != nil {
+			return false
+		}
+		return true
+	}
+	assert.Never(t, queryUsingIndex, 2*time.Second, 100*time.Millisecond, "error should have occurred as there is no index on color field")
 }
 
 func TestIsBulkOptimizable(t *testing.T) {
@@ -1041,18 +1069,18 @@ func assertQueryResults(t *testing.T, results []*queryResult, expectedIds []stri
 
 func TestFormatCheck(t *testing.T) {
 	testCases := []struct {
-		dataFormat     string                         // precondition
-		dataExists     bool                           // precondition
-		expectedFormat string                         // postcondition
-		expectedErr    *dataformat.ErrVersionMismatch // postcondition
+		dataFormat     string                        // precondition
+		dataExists     bool                          // precondition
+		expectedFormat string                        // postcondition
+		expectedErr    *dataformat.ErrFormatMismatch // postcondition
 	}{
 		{
 			dataFormat: "",
 			dataExists: true,
-			expectedErr: &dataformat.ErrVersionMismatch{
-				DBInfo:          "CouchDB for state database",
-				Version:         "",
-				ExpectedVersion: "2.0",
+			expectedErr: &dataformat.ErrFormatMismatch{
+				DBInfo:         "CouchDB for state database",
+				Format:         "",
+				ExpectedFormat: "2.0",
 			},
 			expectedFormat: "does not matter as the test should not reach to check this",
 		},
@@ -1061,30 +1089,30 @@ func TestFormatCheck(t *testing.T) {
 			dataFormat:     "",
 			dataExists:     false,
 			expectedErr:    nil,
-			expectedFormat: dataformat.Version20,
+			expectedFormat: dataformat.CurrentFormat,
 		},
 
 		{
-			dataFormat:     dataformat.Version20,
+			dataFormat:     dataformat.CurrentFormat,
 			dataExists:     false,
-			expectedFormat: dataformat.Version20,
+			expectedFormat: dataformat.CurrentFormat,
 			expectedErr:    nil,
 		},
 
 		{
-			dataFormat:     dataformat.Version20,
+			dataFormat:     dataformat.CurrentFormat,
 			dataExists:     true,
-			expectedFormat: dataformat.Version20,
+			expectedFormat: dataformat.CurrentFormat,
 			expectedErr:    nil,
 		},
 
 		{
 			dataFormat: "3.0",
 			dataExists: true,
-			expectedErr: &dataformat.ErrVersionMismatch{
-				DBInfo:          "CouchDB for state database",
-				Version:         "3.0",
-				ExpectedVersion: dataformat.Version20,
+			expectedErr: &dataformat.ErrFormatMismatch{
+				DBInfo:         "CouchDB for state database",
+				Format:         "3.0",
+				ExpectedFormat: dataformat.CurrentFormat,
 			},
 			expectedFormat: "does not matter as the test should not reach to check this",
 		},
@@ -1100,7 +1128,7 @@ func TestFormatCheck(t *testing.T) {
 	}
 }
 
-func testFormatCheck(t *testing.T, dataFormat string, dataExists bool, expectedErr *dataformat.ErrVersionMismatch, expectedFormat string, vdbEnv *testVDBEnv) {
+func testFormatCheck(t *testing.T, dataFormat string, dataExists bool, expectedErr *dataformat.ErrFormatMismatch, expectedFormat string, vdbEnv *testVDBEnv) {
 	redoPath, err := ioutil.TempDir("", "redoPath")
 	require.NoError(t, err)
 	defer os.RemoveAll(redoPath)
@@ -1123,12 +1151,16 @@ func testFormatCheck(t *testing.T, dataFormat string, dataExists bool, expectedE
 		require.NoError(t, db.ApplyUpdates(batch, version.NewHeight(1, 1)))
 	}
 	if dataFormat == "" {
-		dropDB(t, dbProvider.couchInstance, fabricInternalDBName)
+		response, err := dropDB(dbProvider.couchInstance, fabricInternalDBName)
+		require.NoError(t, err)
+		require.True(t, response.Ok)
 	} else {
 		require.NoError(t, writeDataFormatVersion(dbProvider.couchInstance, dataFormat))
 	}
 	dbProvider.Close()
-	defer DeleteApplicationDBs(t, vdbEnv.config)
+	defer func() {
+		require.NoError(t, DropApplicationDBs(vdbEnv.config))
+	}()
 
 	// close and reopen with preconditions set and check the expected behavior
 	dbProvider, err = NewVersionedDBProvider(config, &disabled.Provider{}, nil)

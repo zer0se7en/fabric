@@ -77,7 +77,7 @@ func (c *ConfigTx) AddAnchorPeer(orgName string, newAnchorPeer Address) error {
 		// Unmarshal existing anchor peers if the config value exists
 		err := proto.Unmarshal(anchorPeerConfigValue.Value, anchorPeersProto)
 		if err != nil {
-			return fmt.Errorf("failed unmarshaling %s's anchor peer endpoints: %v", orgName, err)
+			return fmt.Errorf("failed unmarshaling anchor peer endpoints for org %s: %v", orgName, err)
 		}
 	}
 
@@ -118,7 +118,7 @@ func (c *ConfigTx) RemoveAnchorPeer(orgName string, anchorPeerToRemove Address) 
 		// Unmarshal existing anchor peers if the config value exists
 		err := proto.Unmarshal(anchorPeerConfigValue.Value, anchorPeersProto)
 		if err != nil {
-			return fmt.Errorf("failed unmarshaling %s's anchor peer endpoints: %v", orgName, err)
+			return fmt.Errorf("failed unmarshaling anchor peer endpoints for org %s: %v", orgName, err)
 		}
 	}
 
@@ -238,9 +238,10 @@ func (c *ConfigTx) AnchorPeers(orgName string) ([]Address, error) {
 	return anchorPeers, nil
 }
 
-// AddApplicationOrg adds an organization to an existing Application configuration.
-// Will not error if organization already exists.
-func (c *ConfigTx) AddApplicationOrg(org Organization) error {
+// SetApplicationOrg sets the organization config group for the given application
+// org key in an existing Application configuration's Groups map.
+// If the application org already exists in the current configuration, its value will be overwritten.
+func (c *ConfigTx) SetApplicationOrg(org Organization) error {
 	appGroup := c.updated.ChannelGroup.Groups[ApplicationGroupKey]
 
 	orgGroup, err := newOrgConfigGroup(org)
@@ -313,13 +314,7 @@ func anchorPeersValue(anchorPeers []*pb.AnchorPeer) *standardConfigValue {
 }
 
 // getApplicationOrg returns the organization config group for an org in the
-// provided config. It returns an error if an application org was not found
-// in the config with the specified name.
-func getApplicationOrg(config *cb.Config, orgName string) (*cb.ConfigGroup, error) {
-	org, ok := config.ChannelGroup.Groups[ApplicationGroupKey].Groups[orgName]
-	if !ok {
-		return nil, fmt.Errorf("application org with name '%s' not found", orgName)
-	}
-
-	return org, nil
+// provided config. It returns nil if the org doesn't exist in the config.
+func getApplicationOrg(config *cb.Config, orgName string) *cb.ConfigGroup {
+	return config.ChannelGroup.Groups[ApplicationGroupKey].Groups[orgName]
 }

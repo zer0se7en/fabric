@@ -6,46 +6,36 @@ SPDX-License-Identifier: Apache-2.0
 
 package configtx
 
-import "math"
-
 const (
 	// These values are fixed for the genesis block.
 	msgVersion = 0
 	epoch      = 0
 
-	defaultHashingAlgorithm = "SHA256"
-
-	defaultBlockDataHashingStructureWidth = math.MaxUint32
-
-	// ConsortiumKey is the key for the common.ConfigValue for the Consortium message.
+	// ConsortiumKey is the key for the ConfigValue of a
+	// Consortium.
 	ConsortiumKey = "Consortium"
 
-	// HashingAlgorithmKey is the common.ConfigValue type key name for the HashingAlgorithm message.
+	// HashingAlgorithmKey is the key for the ConfigValue of a
+	// HashingAlgorithm.
 	HashingAlgorithmKey = "HashingAlgorithm"
 
-	// BlockDataHashingStructureKey is the common.ConfigValue type key name for the BlockDataHashingStructure message.
+	// BlockDataHashingStructureKey is the key for the ConfigValue
+	// of a BlockDataHashingStructure.
 	BlockDataHashingStructureKey = "BlockDataHashingStructure"
 
-	// OrdererAddressesKey is the common.ConfigValue type key name for the OrdererAddresses message.
+	// OrdererAddressesKey is the key for the ConfigValue, OrdererAddresses.
 	OrdererAddressesKey = "OrdererAddresses"
 
-	// CapabilitiesKey is the name of the key which refers to capabilities, it appears at the channel,
-	// application, and orderer levels and this constant is used for all three.
+	// CapabilitiesKey is the key for the ConfigValue, capabilities.
+	// CapabiltiesKey can be used at the channel, application, and orderer levels.
 	CapabilitiesKey = "Capabilities"
 
-	ordererAdminsPolicyName = "/Channel/Orderer/Admins"
-
-	// EndpointsKey is the common.ConfigValue key name for the Endpoints message in the OrdererOrgGroup.
+	// EndpointsKey is the key for the ConfigValue, Endpoints in
+	// a OrdererOrgGroup.
 	EndpointsKey = "Endpoints"
 
-	// MSPKey is the key for the MSP definition in orderer groups.
+	// MSPKey is the key for the ConfigValue, MSP.
 	MSPKey = "MSP"
-
-	// BatchSizeKey is the common.ConfigValue type key name for the BatchSize message.
-	BatchSizeKey = "BatchSize"
-
-	// BatchTimeoutKey is the common.ConfigValue type key name for the BatchTimeout message.
-	BatchTimeoutKey = "BatchTimeout"
 
 	// AdminsPolicyKey is the key used for the admin policy.
 	AdminsPolicyKey = "Admins"
@@ -59,33 +49,18 @@ const (
 	// EndorsementPolicyKey is the key used for the endorsement policy.
 	EndorsementPolicyKey = "Endorsement"
 
-	// LifecycleEndorsementPolicyKey is the key used for the lifecycle endorsement policy.
+	// LifecycleEndorsementPolicyKey is the key used for the lifecycle endorsement
+	// policy.
 	LifecycleEndorsementPolicyKey = "LifecycleEndorsement"
 
-	// BlockValidationPolicyKey is the key used for the block validation policy in the OrdererOrgGroup.
+	// BlockValidationPolicyKey is the key used for the block validation policy in
+	// the OrdererOrgGroup.
 	BlockValidationPolicyKey = "BlockValidation"
 
-	// ChannelCreationPolicyKey is the key used in the consortium config to denote the policy
-	// to be used in evaluating whether a channel creation request is authorized.
+	// ChannelCreationPolicyKey is the key used in the consortium config to denote
+	// the policy to be used in evaluating whether a channel creation request
+	// is authorized.
 	ChannelCreationPolicyKey = "ChannelCreationPolicy"
-
-	// ChannelRestrictionsKey is the key name for the ChannelRestrictions message.
-	ChannelRestrictionsKey = "ChannelRestrictions"
-
-	// ConsensusTypeSolo identifies the solo consensus implementation.
-	ConsensusTypeSolo = "solo"
-
-	// ConsensusTypeKafka identifies the Kafka-based consensus implementation.
-	ConsensusTypeKafka = "kafka"
-
-	// ConsensusTypeRaft identifies the Raft-based consensus implementation.
-	ConsensusTypeEtcdRaft = "etcdraft"
-
-	// KafkaBrokersKey is the common.ConfigValue type key name for the KafkaBrokers message.
-	KafkaBrokersKey = "KafkaBrokers"
-
-	// ConsensusTypeKey is the common.ConfigValue type key name for the ConsensusType message.
-	ConsensusTypeKey = "ConsensusType"
 
 	// ChannelGroupKey is the group name for the channel config.
 	ChannelGroupKey = "Channel"
@@ -111,9 +86,5 @@ const (
 	// SignaturePolicyType is the 'Type' string for signature policies.
 	SignaturePolicyType = "Signature"
 
-	// ConsensusStateNormal indicates normal orderer operation.
-	ConsensusStateNormal ConsensusState = "STATE_NORMAL"
-
-	// ConsensusStateMaintenance indicates the orderer is in consensus type migration.
-	ConsensusStateMaintenance ConsensusState = "STATE_MAINTENANCE"
+	ordererAdminsPolicyName = "/Channel/Orderer/Admins"
 )

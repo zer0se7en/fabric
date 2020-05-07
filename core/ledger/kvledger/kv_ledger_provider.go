@@ -13,7 +13,6 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric-protos-go/common"
 	"github.com/hyperledger/fabric/common/ledger/blkstorage"
-	"github.com/hyperledger/fabric/common/ledger/blkstorage/fsblkstorage"
 	"github.com/hyperledger/fabric/common/ledger/dataformat"
 	"github.com/hyperledger/fabric/common/ledger/util/leveldbhelper"
 	"github.com/hyperledger/fabric/core/ledger"
@@ -64,8 +63,8 @@ const maxBlockFileSize = 64 * 1024 * 1024
 // Provider implements interface ledger.PeerLedgerProvider
 type Provider struct {
 	idStore              *idStore
-	blkStoreProvider     blkstorage.BlockStoreProvider
-	pvtdataStoreProvider pvtdatastorage.Provider
+	blkStoreProvider     *blkstorage.BlockStoreProvider
+	pvtdataStoreProvider *pvtdatastorage.Provider
 	vdbProvider          privacyenabledstate.DBProvider
 	historydbProvider    *history.DBProvider
 	configHistoryMgr     confighistory.Mgr
@@ -89,8 +88,8 @@ func NewProvider(initializer *ledger.Initializer) (pr *Provider, e error) {
 	defer func() {
 		if e != nil {
 			p.Close()
-			if errFormatMismatch, ok := e.(*dataformat.ErrVersionMismatch); ok {
-				if errFormatMismatch.Version == dataformat.Version1x && errFormatMismatch.ExpectedVersion == dataformat.Version20 {
+			if errFormatMismatch, ok := e.(*dataformat.ErrFormatMismatch); ok {
+				if errFormatMismatch.Format == dataformat.PreviousFormat && errFormatMismatch.ExpectedFormat == dataformat.CurrentFormat {
 					logger.Errorf("Please execute the 'peer node upgrade-dbs' command to upgrade the database format: %s", errFormatMismatch)
 				} else {
 					logger.Errorf("Please check the Fabric version matches the ledger data format: %s", errFormatMismatch)
@@ -154,8 +153,8 @@ func (p *Provider) initLedgerIDInventory() error {
 
 func (p *Provider) initBlockStoreProvider() error {
 	indexConfig := &blkstorage.IndexConfig{AttrsToIndex: attrsToIndex}
-	blkStoreProvider, err := fsblkstorage.NewProvider(
-		fsblkstorage.NewConf(
+	blkStoreProvider, err := blkstorage.NewProvider(
+		blkstorage.NewConf(
 			BlockStorePath(p.initializer.Config.RootFSPath),
 			maxBlockFileSize,
 		),
@@ -307,7 +306,7 @@ func (p *Provider) Open(ledgerID string) (ledger.PeerLedger, error) {
 
 func (p *Provider) openInternal(ledgerID string) (ledger.PeerLedger, error) {
 	// Get the block store for a chain/ledger
-	blockStore, err := p.blkStoreProvider.OpenBlockStore(ledgerID)
+	blockStore, err := p.blkStoreProvider.Open(ledgerID)
 	if err != nil {
 		return nil, err
 	}
@@ -471,7 +470,7 @@ func openIDStore(path string) (s *idStore, e error) {
 		return nil, err
 	}
 
-	expectedFormatBytes := []byte(dataformat.Version20)
+	expectedFormatBytes := []byte(dataformat.CurrentFormat)
 	if emptyDB {
 		// add format key to a new db
 		err := db.Put(formatKey, expectedFormatBytes, true)
@@ -482,46 +481,67 @@ func openIDStore(path string) (s *idStore, e error) {
 	}
 
 	// verify the format is current for an existing db
-	formatVersion, err := db.Get(formatKey)
+	format, err := db.Get(formatKey)
 	if err != nil {
 		return nil, err
 	}
-	if !bytes.Equal(formatVersion, expectedFormatBytes) {
+	if !bytes.Equal(format, expectedFormatBytes) {
 		logger.Errorf("The db at path [%s] contains data in unexpected format. expected data format = [%s] (%#v), data format = [%s] (%#v).",
-			path, dataformat.Version20, expectedFormatBytes, formatVersion, formatVersion)
-		return nil, &dataformat.ErrVersionMismatch{
-			ExpectedVersion: dataformat.Version20,
-			Version:         string(formatVersion),
-			DBInfo:          fmt.Sprintf("leveldb for channel-IDs at [%s]", path),
+			path, dataformat.CurrentFormat, expectedFormatBytes, format, format)
+		return nil, &dataformat.ErrFormatMismatch{
+			ExpectedFormat: dataformat.CurrentFormat,
+			Format:         string(format),
+			DBInfo:         fmt.Sprintf("leveldb for channel-IDs at [%s]", path),
 		}
 	}
 	return &idStore{db, path}, nil
 }
 
-func (s *idStore) upgradeFormat() error {
+// checkUpgradeEligibility checks if the format is eligible to upgrade.
+// It returns true if the format is eligible to upgrade to the current format.
+// It returns false if either the format is the current format or the db is empty.
+// Otherwise, an ErrFormatMismatch is returned.
+func (s *idStore) checkUpgradeEligibility() (bool, error) {
+	emptydb, err := s.db.IsEmpty()
+	if err != nil {
+		return false, err
+	}
+	if emptydb {
+		logger.Warnf("Ledger database %s is empty, nothing to upgrade.", s.dbPath)
+		return false, nil
+	}
 	format, err := s.db.Get(formatKey)
+	if err != nil {
+		return false, err
+	}
+	if bytes.Equal(format, []byte(dataformat.CurrentFormat)) {
+		logger.Info("Ledger data format is current, nothing to upgrade.")
+		return false, nil
+	}
+	if !bytes.Equal(format, []byte(dataformat.PreviousFormat)) {
+		err = &dataformat.ErrFormatMismatch{
+			ExpectedFormat: dataformat.PreviousFormat,
+			Format:         string(format),
+			DBInfo:         fmt.Sprintf("leveldb for channel-IDs at [%s]", s.dbPath),
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *idStore) upgradeFormat() error {
+	eligible, err := s.checkUpgradeEligibility()
 	if err != nil {
 		return err
 	}
-	idStoreFormatBytes := []byte(dataformat.Version20)
-	if bytes.Equal(format, idStoreFormatBytes) {
-		logger.Debug("Format is current, nothing to do")
+	if !eligible {
 		return nil
 	}
-	if format != nil {
-		err = &dataformat.ErrVersionMismatch{
-			ExpectedVersion: "",
-			Version:         string(format),
-			DBInfo:          fmt.Sprintf("leveldb for channel-IDs at [%s]", s.dbPath),
-		}
-		logger.Errorf("Failed to upgrade format [%#v] to new format [%#v]: %s", format, idStoreFormatBytes, err)
-		return err
-	}
 
-	logger.Infof("The ledgerProvider db format is old, upgrading to the new format %s", dataformat.Version20)
+	logger.Infof("Upgrading ledgerProvider database to the new format %s", dataformat.CurrentFormat)
 
 	batch := &leveldb.Batch{}
-	batch.Put(formatKey, idStoreFormatBytes)
+	batch.Put(formatKey, []byte(dataformat.CurrentFormat))
 
 	// add new metadata key for each ledger (channel)
 	metadata, err := protoutil.Marshal(&msgs.LedgerMetadata{Status: msgs.Status_ACTIVE})

@@ -31,8 +31,8 @@ func NewDBProvider(path string) (*DBProvider, error) {
 	logger.Debugf("constructing HistoryDBProvider dbPath=%s", path)
 	levelDBProvider, err := leveldbhelper.NewProvider(
 		&leveldbhelper.Conf{
-			DBPath:                path,
-			ExpectedFormatVersion: dataformat.Version20,
+			DBPath:         path,
+			ExpectedFormat: dataformat.CurrentFormat,
 		},
 	)
 	if err != nil {
@@ -146,7 +146,7 @@ func (d *DB) Commit(block *common.Block) error {
 }
 
 // NewQueryExecutor implements method in HistoryDB interface
-func (d *DB) NewQueryExecutor(blockStore blkstorage.BlockStore) (ledger.HistoryQueryExecutor, error) {
+func (d *DB) NewQueryExecutor(blockStore *blkstorage.BlockStore) (ledger.HistoryQueryExecutor, error) {
 	return &QueryExecutor{d.levelDB, blockStore}, nil
 }
 

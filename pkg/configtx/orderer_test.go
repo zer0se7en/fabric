@@ -17,6 +17,7 @@ import (
 	cb "github.com/hyperledger/fabric-protos-go/common"
 	"github.com/hyperledger/fabric/common/tools/protolator"
 	"github.com/hyperledger/fabric/common/tools/protolator/protoext/ordererext"
+	"github.com/hyperledger/fabric/pkg/configtx/orderer"
 	. "github.com/onsi/gomega"
 )
 
@@ -29,7 +30,7 @@ func TestNewOrdererGroup(t *testing.T) {
 		expectedConfigJSONGen func(Orderer) string
 	}{
 		{
-			ordererType:           ConsensusTypeSolo,
+			ordererType:           orderer.ConsensusTypeSolo,
 			numOrdererGroupValues: 5,
 			expectedConfigJSONGen: func(o Orderer) string {
 				certBase64, pkBase64, crlBase64 := certPrivKeyCRLBase64(t, o.Organizations[0].MSP)
@@ -258,7 +259,7 @@ func TestNewOrdererGroup(t *testing.T) {
 			},
 		},
 		{
-			ordererType:           ConsensusTypeEtcdRaft,
+			ordererType:           orderer.ConsensusTypeEtcdRaft,
 			numOrdererGroupValues: 5,
 			expectedConfigJSONGen: func(o Orderer) string {
 				certBase64, pkBase64, crlBase64 := certPrivKeyCRLBase64(t, o.Organizations[0].MSP)
@@ -517,7 +518,7 @@ func TestNewOrdererGroup(t *testing.T) {
 			},
 		},
 		{
-			ordererType:           ConsensusTypeKafka,
+			ordererType:           orderer.ConsensusTypeKafka,
 			numOrdererGroupValues: 6,
 			expectedConfigJSONGen: func(o Orderer) string {
 				certBase64, pkBase64, crlBase64 := certPrivKeyCRLBase64(t, o.Organizations[0].MSP)
@@ -810,8 +811,8 @@ func TestNewOrdererGroupFailure(t *testing.T) {
 		{
 			testName: "When missing consenters in EtcdRaft for consensus type etcdraft",
 			ordererMod: func(o *Orderer) {
-				o.OrdererType = ConsensusTypeEtcdRaft
-				o.EtcdRaft = EtcdRaft{
+				o.OrdererType = orderer.ConsensusTypeEtcdRaft
+				o.EtcdRaft = orderer.EtcdRaft{
 					Consenters: nil,
 				}
 			},
@@ -820,11 +821,11 @@ func TestNewOrdererGroupFailure(t *testing.T) {
 		{
 			testName: "When missing a client tls cert in EtcdRaft for consensus type etcdraft",
 			ordererMod: func(o *Orderer) {
-				o.OrdererType = ConsensusTypeEtcdRaft
-				o.EtcdRaft = EtcdRaft{
-					Consenters: []Consenter{
+				o.OrdererType = orderer.ConsensusTypeEtcdRaft
+				o.EtcdRaft = orderer.EtcdRaft{
+					Consenters: []orderer.Consenter{
 						{
-							Address: Address{
+							Address: orderer.EtcdAddress{
 								Host: "host1",
 								Port: 123,
 							},
@@ -838,11 +839,11 @@ func TestNewOrdererGroupFailure(t *testing.T) {
 		{
 			testName: "When missing a server tls cert in EtcdRaft for consensus type etcdraft",
 			ordererMod: func(o *Orderer) {
-				o.OrdererType = ConsensusTypeEtcdRaft
-				o.EtcdRaft = EtcdRaft{
-					Consenters: []Consenter{
+				o.OrdererType = orderer.ConsensusTypeEtcdRaft
+				o.EtcdRaft = orderer.EtcdRaft{
+					Consenters: []orderer.Consenter{
 						{
-							Address: Address{
+							Address: orderer.EtcdAddress{
 								Host: "host1",
 								Port: 123,
 							},
@@ -887,7 +888,7 @@ func TestNewOrdererGroupFailure(t *testing.T) {
 	}
 }
 
-func TestUpdateOrdererConfiguration(t *testing.T) {
+func TestSetOrdererConfiguration(t *testing.T) {
 	t.Parallel()
 
 	gt := NewGomegaWithT(t)
@@ -941,11 +942,11 @@ func TestUpdateOrdererConfiguration(t *testing.T) {
 	// Modify MaxMessageCount, Addresses, and ConesnsusType to etcdraft
 	updatedOrdererConf.BatchSize.MaxMessageCount = 10000
 	updatedOrdererConf.Addresses = []Address{{Host: "newhost", Port: 345}}
-	updatedOrdererConf.OrdererType = ConsensusTypeEtcdRaft
-	updatedOrdererConf.EtcdRaft = EtcdRaft{
-		Consenters: []Consenter{
+	updatedOrdererConf.OrdererType = orderer.ConsensusTypeEtcdRaft
+	updatedOrdererConf.EtcdRaft = orderer.EtcdRaft{
+		Consenters: []orderer.Consenter{
 			{
-				Address: Address{
+				Address: orderer.EtcdAddress{
 					Host: "host1",
 					Port: 123,
 				},
@@ -953,14 +954,12 @@ func TestUpdateOrdererConfiguration(t *testing.T) {
 				ServerTLSCert: &x509.Certificate{},
 			},
 		},
-		Options: EtcdRaftOptions{},
+		Options: orderer.EtcdRaftOptions{},
 	}
 
-	c := ConfigTx{
-		original: config,
-		updated:  config,
-	}
-	err = c.UpdateOrdererConfiguration(updatedOrdererConf)
+	c := New(config)
+
+	err = c.SetOrdererConfiguration(updatedOrdererConf)
 	gt.Expect(err).NotTo(HaveOccurred())
 
 	expectedConfigJSON := fmt.Sprintf(`
@@ -1237,7 +1236,7 @@ func TestUpdateOrdererConfiguration(t *testing.T) {
 `, certBase64, crlBase64, pkBase64)
 
 	buf := &bytes.Buffer{}
-	err = protolator.DeepMarshalJSON(buf, config)
+	err = protolator.DeepMarshalJSON(buf, c.UpdatedConfig())
 	gt.Expect(err).NotTo(HaveOccurred())
 
 	gt.Expect(buf.String()).To(MatchJSON(expectedConfigJSON))
@@ -1250,13 +1249,13 @@ func TestOrdererConfiguration(t *testing.T) {
 		ordererType string
 	}{
 		{
-			ordererType: ConsensusTypeSolo,
+			ordererType: orderer.ConsensusTypeSolo,
 		},
 		{
-			ordererType: ConsensusTypeKafka,
+			ordererType: orderer.ConsensusTypeKafka,
 		},
 		{
-			ordererType: ConsensusTypeEtcdRaft,
+			ordererType: orderer.ConsensusTypeEtcdRaft,
 		},
 	}
 
@@ -1292,10 +1291,7 @@ func TestOrdererConfiguration(t *testing.T) {
 				},
 			}
 
-			c := ConfigTx{
-				original: config,
-				updated:  config,
-			}
+			c := New(config)
 
 			ordererConf, err := c.OrdererConfiguration()
 			gt.Expect(err).NotTo(HaveOccurred())
@@ -1315,7 +1311,7 @@ func TestOrdererConfigurationFailure(t *testing.T) {
 	}{
 		{
 			testName:    "When the orderer group does not exist",
-			ordererType: ConsensusTypeSolo,
+			ordererType: orderer.ConsensusTypeSolo,
 			configMod: func(config *cb.Config, gt *GomegaWithT) {
 				delete(config.ChannelGroup.Groups, OrdererGroupKey)
 			},
@@ -1323,7 +1319,7 @@ func TestOrdererConfigurationFailure(t *testing.T) {
 		},
 		{
 			testName:    "When the config contains an unknown consensus type",
-			ordererType: ConsensusTypeSolo,
+			ordererType: orderer.ConsensusTypeSolo,
 			configMod: func(config *cb.Config, gt *GomegaWithT) {
 				err := setValue(config.ChannelGroup.Groups[OrdererGroupKey], consensusTypeValue("badtype", nil, 0), AdminsPolicyKey)
 				gt.Expect(err).NotTo(HaveOccurred())
@@ -1332,24 +1328,24 @@ func TestOrdererConfigurationFailure(t *testing.T) {
 		},
 		{
 			testName:    "Missing Kafka brokers for kafka orderer",
-			ordererType: ConsensusTypeKafka,
+			ordererType: orderer.ConsensusTypeKafka,
 			configMod: func(config *cb.Config, gt *GomegaWithT) {
-				delete(config.ChannelGroup.Groups[OrdererGroupKey].Values, KafkaBrokersKey)
+				delete(config.ChannelGroup.Groups[OrdererGroupKey].Values, orderer.KafkaBrokersKey)
 			},
 			expectedErr: "unable to find kafka brokers for kafka orderer",
 		},
 		{
 			testName:    "Failed unmarshaling etcd raft metadata",
-			ordererType: ConsensusTypeEtcdRaft,
+			ordererType: orderer.ConsensusTypeEtcdRaft,
 			configMod: func(config *cb.Config, gt *GomegaWithT) {
-				err := setValue(config.ChannelGroup.Groups[OrdererGroupKey], consensusTypeValue(ConsensusTypeEtcdRaft, nil, 0), AdminsPolicyKey)
+				err := setValue(config.ChannelGroup.Groups[OrdererGroupKey], consensusTypeValue(orderer.ConsensusTypeEtcdRaft, nil, 0), AdminsPolicyKey)
 				gt.Expect(err).NotTo(HaveOccurred())
 			},
 			expectedErr: "unmarshaling etcd raft metadata: missing etcdraft metadata options in config",
 		},
 		{
 			testName:    "Invalid batch timeout",
-			ordererType: ConsensusTypeSolo,
+			ordererType: orderer.ConsensusTypeSolo,
 			configMod: func(config *cb.Config, gt *GomegaWithT) {
 				err := setValue(config.ChannelGroup.Groups[OrdererGroupKey], batchTimeoutValue("invalidtime"), AdminsPolicyKey)
 				gt.Expect(err).NotTo(HaveOccurred())
@@ -1358,7 +1354,7 @@ func TestOrdererConfigurationFailure(t *testing.T) {
 		},
 		{
 			testName:    "Missing orderer address in config",
-			ordererType: ConsensusTypeSolo,
+			ordererType: orderer.ConsensusTypeSolo,
 			configMod: func(config *cb.Config, gt *GomegaWithT) {
 				delete(config.ChannelGroup.Values, OrdererAddressesKey)
 			},
@@ -1386,17 +1382,14 @@ func TestOrdererConfigurationFailure(t *testing.T) {
 				},
 			}
 
-			c := ConfigTx{
-				original: config,
-				updated:  config,
-			}
-
-			err = setValue(c.updated.ChannelGroup, ordererAddressesValue(baseOrdererConfig.Addresses), ordererAdminsPolicyName)
+			err = setValue(config.ChannelGroup, ordererAddressesValue(baseOrdererConfig.Addresses), ordererAdminsPolicyName)
 			gt.Expect(err).NotTo(HaveOccurred())
 
 			if tt.configMod != nil {
-				tt.configMod(c.updated, gt)
+				tt.configMod(config, gt)
 			}
+
+			c := New(config)
 
 			_, err = c.OrdererConfiguration()
 			gt.Expect(err).To(MatchError(tt.expectedErr))
@@ -1420,10 +1413,7 @@ func TestAddOrdererOrg(t *testing.T) {
 		},
 	}
 
-	c := ConfigTx{
-		original: config,
-		updated:  config,
-	}
+	c := New(config)
 
 	org := Organization{
 		Name:     "OrdererOrg2",
@@ -1564,7 +1554,7 @@ func TestAddOrdererOrg(t *testing.T) {
 }
 `, certBase64, crlBase64, pkBase64)
 
-	err = c.AddOrdererOrg(org)
+	err = c.SetOrdererOrg(org)
 	gt.Expect(err).NotTo(HaveOccurred())
 
 	actualOrdererConfigGroup := c.updated.ChannelGroup.Groups[OrdererGroupKey].Groups["OrdererOrg2"]
@@ -1574,7 +1564,7 @@ func TestAddOrdererOrg(t *testing.T) {
 	gt.Expect(buf.String()).To(MatchJSON(expectedConfigJSON))
 }
 
-func TestAddOrdererOrgFailures(t *testing.T) {
+func TestSetOrdererOrgFailures(t *testing.T) {
 	t.Parallel()
 
 	gt := NewGomegaWithT(t)
@@ -1590,20 +1580,17 @@ func TestAddOrdererOrgFailures(t *testing.T) {
 		},
 	}
 
-	c := ConfigTx{
-		original: config,
-		updated:  config,
-	}
+	c := New(config)
 
 	org := Organization{
 		Name: "OrdererOrg2",
 	}
 
-	err = c.AddOrdererOrg(org)
+	err = c.SetOrdererOrg(org)
 	gt.Expect(err).To(MatchError("failed to create orderer org 'OrdererOrg2': no policies defined"))
 }
 
-func TestAddOrdererEndpoint(t *testing.T) {
+func TestSetOrdererEndpoint(t *testing.T) {
 	t.Parallel()
 
 	gt := NewGomegaWithT(t)
@@ -1637,10 +1624,7 @@ func TestAddOrdererEndpoint(t *testing.T) {
 		Sequence: 0,
 	}
 
-	c := ConfigTx{
-		original: config,
-		updated:  config,
-	}
+	c := New(config)
 
 	expectedUpdatedConfigJSON := `
 {
@@ -1686,80 +1670,10 @@ func TestAddOrdererEndpoint(t *testing.T) {
 	gt.Expect(err).ToNot(HaveOccurred())
 
 	newOrderer1OrgEndpoint := Address{Host: "127.0.0.1", Port: 9050}
-	err = c.AddOrdererEndpoint("Orderer1Org", newOrderer1OrgEndpoint)
+	err = c.SetOrdererEndpoint("Orderer1Org", newOrderer1OrgEndpoint)
 	gt.Expect(err).NotTo(HaveOccurred())
 
-	gt.Expect(c.updated).To(Equal(expectedUpdatedConfig))
-}
-
-func TestAddOrdererEndpointFailure(t *testing.T) {
-	t.Parallel()
-
-	config := &cb.Config{
-		ChannelGroup: &cb.ConfigGroup{
-			Groups: map[string]*cb.ConfigGroup{
-				OrdererGroupKey: {
-					Version: 0,
-					Groups: map[string]*cb.ConfigGroup{
-						"OrdererOrg": {
-							Groups: map[string]*cb.ConfigGroup{},
-							Values: map[string]*cb.ConfigValue{
-								EndpointsKey: {
-									ModPolicy: AdminsPolicyKey,
-									Value: marshalOrPanic(&cb.OrdererAddresses{
-										Addresses: []string{"127.0.0.1:7050"},
-									}),
-								},
-							},
-							Policies: map[string]*cb.ConfigPolicy{},
-						},
-					},
-					Values:   map[string]*cb.ConfigValue{},
-					Policies: map[string]*cb.ConfigPolicy{},
-				},
-			},
-			Values:   map[string]*cb.ConfigValue{},
-			Policies: map[string]*cb.ConfigPolicy{},
-		},
-		Sequence: 0,
-	}
-
-	c := ConfigTx{
-		original: config,
-		updated:  config,
-	}
-
-	tests := []struct {
-		testName    string
-		orgName     string
-		endpoint    Address
-		expectedErr string
-	}{
-		{
-			testName:    "When the org for the orderer does not exist",
-			orgName:     "BadOrg",
-			endpoint:    Address{Host: "127.0.0.1", Port: 7050},
-			expectedErr: "orderer org BadOrg does not exist in channel config",
-		},
-		{
-			testName:    "When the orderer endpoint being added already exists in the org",
-			orgName:     "OrdererOrg",
-			endpoint:    Address{Host: "127.0.0.1", Port: 7050},
-			expectedErr: "orderer org OrdererOrg already contains endpoint 127.0.0.1:7050",
-		},
-	}
-
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.testName, func(t *testing.T) {
-			t.Parallel()
-
-			gt := NewGomegaWithT(t)
-
-			err := c.AddOrdererEndpoint(tt.orgName, tt.endpoint)
-			gt.Expect(err).To(MatchError(tt.expectedErr))
-		})
-	}
+	gt.Expect(proto.Equal(c.UpdatedConfig(), expectedUpdatedConfig)).To(BeTrue())
 }
 
 func TestRemoveOrdererEndpoint(t *testing.T) {
@@ -1797,10 +1711,7 @@ func TestRemoveOrdererEndpoint(t *testing.T) {
 		Sequence: 0,
 	}
 
-	c := ConfigTx{
-		original: config,
-		updated:  config,
-	}
+	c := New(config)
 
 	expectedUpdatedConfigJSON := `
 {
@@ -1848,7 +1759,7 @@ func TestRemoveOrdererEndpoint(t *testing.T) {
 	err = c.RemoveOrdererEndpoint("OrdererOrg", removedEndpoint)
 	gt.Expect(err).NotTo(HaveOccurred())
 
-	gt.Expect(c.updated).To(Equal(expectedUpdatedConfig))
+	gt.Expect(proto.Equal(c.UpdatedConfig(), expectedUpdatedConfig)).To(BeTrue())
 }
 
 func TestRemoveOrdererEndpointFailure(t *testing.T) {
@@ -1883,20 +1794,32 @@ func TestRemoveOrdererEndpointFailure(t *testing.T) {
 		Sequence: 0,
 	}
 
-	c := ConfigTx{
-		original: config,
-		updated:  config,
-	}
+	c := New(config)
 
 	err := c.RemoveOrdererEndpoint("OrdererOrg", Address{Host: "127.0.0.1", Port: 8050})
 	gt.Expect(err).To(MatchError("failed unmarshaling orderer org OrdererOrg's endpoints: proto: can't skip unknown wire type 6"))
 }
 
+func TestGetOrdererOrg(t *testing.T) {
+	t.Parallel()
+	gt := NewGomegaWithT(t)
+
+	ordererChannelGroup, err := baseOrdererChannelGroup(t, orderer.ConsensusTypeSolo)
+	gt.Expect(err).NotTo(HaveOccurred())
+
+	config := &cb.Config{
+		ChannelGroup: ordererChannelGroup,
+	}
+
+	ordererOrgGroup := getOrdererOrg(config, "OrdererOrg")
+	gt.Expect(ordererOrgGroup).To(Equal(config.ChannelGroup.Groups[OrdererGroupKey].Groups["OrdererOrg"]))
+}
+
 func baseOrdererOfType(t *testing.T, ordererType string) Orderer {
 	switch ordererType {
-	case ConsensusTypeKafka:
+	case orderer.ConsensusTypeKafka:
 		return baseKafkaOrderer(t)
-	case ConsensusTypeEtcdRaft:
+	case orderer.ConsensusTypeEtcdRaft:
 		return baseEtcdRaftOrderer(t)
 	default:
 		return baseSoloOrderer(t)
@@ -1906,7 +1829,7 @@ func baseOrdererOfType(t *testing.T, ordererType string) Orderer {
 func baseSoloOrderer(t *testing.T) Orderer {
 	return Orderer{
 		Policies:    ordererStandardPolicies(),
-		OrdererType: ConsensusTypeSolo,
+		OrdererType: orderer.ConsensusTypeSolo,
 		Organizations: []Organization{
 			{
 				Name:     "OrdererOrg",
@@ -1918,7 +1841,7 @@ func baseSoloOrderer(t *testing.T) Orderer {
 			},
 		},
 		Capabilities: []string{"V1_3"},
-		BatchSize: BatchSize{
+		BatchSize: orderer.BatchSize{
 			MaxMessageCount:   100,
 			AbsoluteMaxBytes:  100,
 			PreferredMaxBytes: 100,
@@ -1929,30 +1852,30 @@ func baseSoloOrderer(t *testing.T) Orderer {
 				Port: 123,
 			},
 		},
-		State: ConsensusStateNormal,
+		State: orderer.ConsensusStateNormal,
 	}
 }
 
 func baseKafkaOrderer(t *testing.T) Orderer {
-	orderer := baseSoloOrderer(t)
-	orderer.OrdererType = ConsensusTypeKafka
-	orderer.Kafka = Kafka{
+	soloOrderer := baseSoloOrderer(t)
+	soloOrderer.OrdererType = orderer.ConsensusTypeKafka
+	soloOrderer.Kafka = orderer.Kafka{
 		Brokers: []string{"broker1", "broker2"},
 	}
 
-	return orderer
+	return soloOrderer
 }
 
 func baseEtcdRaftOrderer(t *testing.T) Orderer {
 	caCert, caPrivKey := generateCACertAndPrivateKey(t, "orderer-org")
 	cert, _ := generateCertAndPrivateKeyFromCACert(t, "orderer-org", caCert, caPrivKey)
 
-	orderer := baseSoloOrderer(t)
-	orderer.OrdererType = ConsensusTypeEtcdRaft
-	orderer.EtcdRaft = EtcdRaft{
-		Consenters: []Consenter{
+	soloOrderer := baseSoloOrderer(t)
+	soloOrderer.OrdererType = orderer.ConsensusTypeEtcdRaft
+	soloOrderer.EtcdRaft = orderer.EtcdRaft{
+		Consenters: []orderer.Consenter{
 			{
-				Address: Address{
+				Address: orderer.EtcdAddress{
 					Host: "node-1.example.com",
 					Port: 7050,
 				},
@@ -1960,7 +1883,7 @@ func baseEtcdRaftOrderer(t *testing.T) Orderer {
 				ServerTLSCert: cert,
 			},
 			{
-				Address: Address{
+				Address: orderer.EtcdAddress{
 					Host: "node-2.example.com",
 					Port: 7050,
 				},
@@ -1968,7 +1891,7 @@ func baseEtcdRaftOrderer(t *testing.T) Orderer {
 				ServerTLSCert: cert,
 			},
 			{
-				Address: Address{
+				Address: orderer.EtcdAddress{
 					Host: "node-3.example.com",
 					Port: 7050,
 				},
@@ -1976,10 +1899,25 @@ func baseEtcdRaftOrderer(t *testing.T) Orderer {
 				ServerTLSCert: cert,
 			},
 		},
-		Options: EtcdRaftOptions{},
+		Options: orderer.EtcdRaftOptions{},
 	}
 
-	return orderer
+	return soloOrderer
+}
+
+// baseOrdererChannelGroup creates a channel config group
+// that only contains an Orderer group.
+func baseOrdererChannelGroup(t *testing.T, ordererType string) (*cb.ConfigGroup, error) {
+	channelGroup := newConfigGroup()
+
+	ordererConf := baseOrdererOfType(t, ordererType)
+	ordererGroup, err := newOrdererGroup(ordererConf)
+	if err != nil {
+		return nil, err
+	}
+	channelGroup.Groups[OrdererGroupKey] = ordererGroup
+
+	return channelGroup, nil
 }
 
 // marshalOrPanic is a helper for proto marshal.
