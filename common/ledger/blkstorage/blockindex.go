@@ -9,10 +9,14 @@ package blkstorage
 import (
 	"bytes"
 	"fmt"
+	"hash"
+	"path"
+	"unicode/utf8"
 
 	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric-protos-go/common"
 	"github.com/hyperledger/fabric-protos-go/peer"
+	"github.com/hyperledger/fabric/common/ledger/snapshot"
 	"github.com/hyperledger/fabric/common/ledger/util"
 	"github.com/hyperledger/fabric/common/ledger/util/leveldbhelper"
 	"github.com/hyperledger/fabric/internal/pkg/txflags"
@@ -25,6 +29,10 @@ const (
 	txIDIdxKeyPrefix            = 't'
 	blockNumTranNumIdxKeyPrefix = 'a'
 	indexCheckpointKeyStr       = "indexCheckpointKey"
+
+	snapshotFileFormat       = byte(1)
+	snapshotDataFileName     = "txids.data"
+	snapshotMetadataFileName = "txids.metadata"
 )
 
 var indexCheckpointKey = []byte(indexCheckpointKeyStr)
@@ -248,6 +256,69 @@ func (index *blockIndex) getTXLocByBlockNumTranNum(blockNum uint64, tranNum uint
 	return txFLP, nil
 }
 
+func (index *blockIndex) exportUniqueTxIDs(dir string, hasher hash.Hash) (map[string][]byte, error) {
+	if !index.isAttributeIndexed(IndexableAttrTxID) {
+		return nil, ErrAttrNotIndexed
+	}
+
+	// create the data file
+	dataFile, err := snapshot.CreateFile(path.Join(dir, snapshotDataFileName), snapshotFileFormat, hasher)
+	if err != nil {
+		return nil, err
+	}
+	defer dataFile.Close()
+
+	dbItr := index.db.GetIterator([]byte{txIDIdxKeyPrefix}, []byte{txIDIdxKeyPrefix + 1})
+	defer dbItr.Release()
+	if err := dbItr.Error(); err != nil {
+		return nil, errors.Wrap(err, "internal leveldb error while obtaining db iterator")
+	}
+
+	var previousTxID string
+	var numTxIDs uint64 = 0
+	for dbItr.Next() {
+		if err := dbItr.Error(); err != nil {
+			return nil, errors.Wrap(err, "internal leveldb error while iterating for txids")
+		}
+		txID, err := retrieveTxID(dbItr.Key())
+		if err != nil {
+			return nil, err
+		}
+		// duplicate TxID may be present in the index
+		if previousTxID == txID {
+			continue
+		}
+		previousTxID = txID
+		if err := dataFile.EncodeString(txID); err != nil {
+			return nil, err
+		}
+		numTxIDs++
+	}
+
+	dataHash, err := dataFile.Done()
+	if err != nil {
+		return nil, err
+	}
+
+	// create the metadata file
+	hasher.Reset()
+	metadataFile, err := snapshot.CreateFile(path.Join(dir, snapshotMetadataFileName), snapshotFileFormat, hasher)
+	if err != nil {
+		return nil, err
+	}
+	defer metadataFile.Close()
+
+	if err = metadataFile.EncodeUVarint(numTxIDs); err != nil {
+		return nil, err
+	}
+	metadataHash, err := metadataFile.Done()
+
+	return map[string][]byte{
+		snapshotDataFileName:     dataHash,
+		snapshotMetadataFileName: metadataHash,
+	}, nil
+}
+
 func constructBlockNumKey(blockNum uint64) []byte {
 	blkNumBytes := util.EncodeOrderPreservingVarUint64(blockNum)
 	return append([]byte{blockNumIdxKeyPrefix}, blkNumBytes...)
@@ -265,6 +336,28 @@ func constructTxIDKey(txID string, blkNum, txNum uint64) []byte {
 	k = append(k, txID...)
 	k = append(k, util.EncodeOrderPreservingVarUint64(blkNum)...)
 	return append(k, util.EncodeOrderPreservingVarUint64(txNum)...)
+}
+
+// retrieveTxID takes input an encoded txid key of the format `prefix:len(TxID):TxID:BlkNum:TxNum`
+// and returns the TxID from this
+func retrieveTxID(encodedTxIDKey []byte) (string, error) {
+	if len(encodedTxIDKey) == 0 {
+		return "", errors.New("invalid txIDKey - zero-length slice")
+	}
+	if encodedTxIDKey[0] != txIDIdxKeyPrefix {
+		return "", errors.Errorf("invalid txIDKey {%x} - unexpected prefix", encodedTxIDKey)
+	}
+	remainingBytes := encodedTxIDKey[utf8.RuneLen(txIDIdxKeyPrefix):]
+
+	txIDLen, n, err := util.DecodeOrderPreservingVarUint64(remainingBytes)
+	if err != nil {
+		return "", errors.WithMessagef(err, "invalid txIDKey {%x}", encodedTxIDKey)
+	}
+	remainingBytes = remainingBytes[n:]
+	if len(remainingBytes) <= int(txIDLen) {
+		return "", errors.Errorf("invalid txIDKey {%x}, fewer bytes present", encodedTxIDKey)
+	}
+	return string(remainingBytes[:int(txIDLen)]), nil
 }
 
 type rangeScan struct {
@@ -366,7 +459,6 @@ func (flp *fileLocPointer) String() string {
 }
 
 func (blockIdxInfo *blockIdxInfo) String() string {
-
 	var buffer bytes.Buffer
 	for _, txOffset := range blockIdxInfo.txOffsets {
 		buffer.WriteString("txId=")

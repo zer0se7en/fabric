@@ -268,7 +268,7 @@ var _ = Describe("Instance", func() {
 			Consistently(errCh).ShouldNot(Receive())
 
 			err = instance.Stop()
-			Expect(err).ToNot(HaveOccurred())
+			Expect(err).NotTo(HaveOccurred())
 			Eventually(errCh).Should(Receive(MatchError("signal: terminated")))
 		})
 
@@ -286,7 +286,7 @@ var _ = Describe("Instance", func() {
 				Consistently(errCh).ShouldNot(Receive())
 
 				err = instance.Stop()
-				Expect(err).ToNot(HaveOccurred())
+				Expect(err).NotTo(HaveOccurred())
 				Eventually(errCh).Should(Receive(MatchError("signal: killed")))
 			})
 		})

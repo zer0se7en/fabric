@@ -25,6 +25,7 @@ import (
 	"github.com/hyperledger/fabric/orderer/common/blockcutter"
 	"github.com/hyperledger/fabric/orderer/common/localconfig"
 	"github.com/hyperledger/fabric/orderer/common/msgprocessor"
+	"github.com/hyperledger/fabric/orderer/common/types"
 	"github.com/hyperledger/fabric/orderer/consensus"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
@@ -229,6 +230,8 @@ func (r *Registrar) Initialize(consenters map[string]consensus.Consenter) {
 
 // SystemChannelID returns the ChannelID for the system channel.
 func (r *Registrar) SystemChannelID() string {
+	r.lock.RLock()
+	defer r.lock.RUnlock()
 	return r.systemChannelID
 }
 
@@ -369,4 +372,35 @@ func (r *Registrar) NewChannelConfig(envConfigUpdate *cb.Envelope) (channelconfi
 // CreateBundle calls channelconfig.NewBundle
 func (r *Registrar) CreateBundle(channelID string, config *cb.Config) (channelconfig.Resources, error) {
 	return channelconfig.NewBundle(channelID, config, r.bccsp)
+}
+
+// ChannelList returns a slice of ChannelInfoShort containing all application channels (excluding the system
+// channel), and ChannelInfoShort of the system channel (nil if does not exist).
+// The URL fields are empty, and are to be completed by the caller.
+func (r *Registrar) ChannelList() types.ChannelList {
+	r.lock.RLock()
+	defer r.lock.RUnlock()
+
+	list := types.ChannelList{}
+
+	if len(r.chains) == 0 {
+		return list
+	}
+
+	if r.systemChannelID != "" {
+		list.SystemChannel = &types.ChannelInfoShort{Name: r.systemChannelID}
+	}
+	for name := range r.chains {
+		if name == r.systemChannelID {
+			continue
+		}
+		list.Channels = append(list.Channels, types.ChannelInfoShort{Name: name})
+	}
+
+	return list
+}
+
+func (r *Registrar) ChannelInfo(channelID string) (types.ChannelInfo, error) {
+	//TODO
+	return types.ChannelInfo{}, errors.New("Not implemented yet")
 }

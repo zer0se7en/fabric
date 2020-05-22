@@ -65,7 +65,7 @@ type Provider struct {
 	idStore              *idStore
 	blkStoreProvider     *blkstorage.BlockStoreProvider
 	pvtdataStoreProvider *pvtdatastorage.Provider
-	vdbProvider          privacyenabledstate.DBProvider
+	dbProvider           *privacyenabledstate.DBProvider
 	historydbProvider    *history.DBProvider
 	configHistoryMgr     confighistory.Mgr
 	stateListeners       []ledger.StateListener
@@ -238,7 +238,7 @@ func (p *Provider) initStateDBProvider() error {
 		LevelDBPath:   StateDBPath(p.initializer.Config.RootFSPath),
 	}
 	sysNamespaces := p.initializer.DeployedChaincodeInfoProvider.Namespaces()
-	p.vdbProvider, err = privacyenabledstate.NewCommonStorageDBProvider(
+	p.dbProvider, err = privacyenabledstate.NewDBProvider(
 		p.bookkeepingProvider,
 		p.initializer.MetricsProvider,
 		p.initializer.HealthCheckRegistry,
@@ -272,7 +272,7 @@ func (p *Provider) Create(genesisBlock *common.Block) (ledger.PeerLedger, error)
 	if err = p.idStore.setUnderConstructionFlag(ledgerID); err != nil {
 		return nil, err
 	}
-	lgr, err := p.openInternal(ledgerID)
+	lgr, err := p.open(ledgerID)
 	if err != nil {
 		logger.Errorf("Error opening a new empty ledger. Unsetting under construction flag. Error: %+v", err)
 		panicOnErr(p.runCleanup(ledgerID), "Error running cleanup for ledger id [%s]", ledgerID)
@@ -301,10 +301,10 @@ func (p *Provider) Open(ledgerID string) (ledger.PeerLedger, error) {
 	if !active {
 		return nil, ErrInactiveLedger
 	}
-	return p.openInternal(ledgerID)
+	return p.open(ledgerID)
 }
 
-func (p *Provider) openInternal(ledgerID string) (ledger.PeerLedger, error) {
+func (p *Provider) open(ledgerID string) (ledger.PeerLedger, error) {
 	// Get the block store for a chain/ledger
 	blockStore, err := p.blkStoreProvider.Open(ledgerID)
 	if err != nil {
@@ -319,7 +319,7 @@ func (p *Provider) openInternal(ledgerID string) (ledger.PeerLedger, error) {
 	p.collElgNotifier.registerListener(ledgerID, pvtdataStore)
 
 	// Get the versioned database (state database) for a chain/ledger
-	vDB, err := p.vdbProvider.GetDBHandle(ledgerID)
+	db, err := p.dbProvider.GetDBHandle(ledgerID)
 	if err != nil {
 		return nil, err
 	}
@@ -333,21 +333,23 @@ func (p *Provider) openInternal(ledgerID string) (ledger.PeerLedger, error) {
 		}
 	}
 
-	l, err := newKVLedger(
-		ledgerID,
-		blockStore,
-		pvtdataStore,
-		vDB,
-		historyDB,
-		p.configHistoryMgr,
-		p.stateListeners,
-		p.bookkeepingProvider,
-		p.initializer.DeployedChaincodeInfoProvider,
-		p.initializer.ChaincodeLifecycleEventProvider,
-		p.stats.ledgerStats(ledgerID),
-		p.initializer.CustomTxProcessors,
-		p.hasher,
-	)
+	initializer := &lgrInitializer{
+		ledgerID:                 ledgerID,
+		blockStore:               blockStore,
+		pvtdataStore:             pvtdataStore,
+		stateDB:                  db,
+		historyDB:                historyDB,
+		configHistoryMgr:         p.configHistoryMgr,
+		stateListeners:           p.stateListeners,
+		bookkeeperProvider:       p.bookkeepingProvider,
+		ccInfoProvider:           p.initializer.DeployedChaincodeInfoProvider,
+		ccLifecycleEventProvider: p.initializer.ChaincodeLifecycleEventProvider,
+		stats:                    p.stats.ledgerStats(ledgerID),
+		customTxProcessors:       p.initializer.CustomTxProcessors,
+		hasher:                   p.hasher,
+	}
+
+	l, err := newKVLedger(initializer)
 	if err != nil {
 		return nil, err
 	}
@@ -375,8 +377,8 @@ func (p *Provider) Close() {
 	if p.pvtdataStoreProvider != nil {
 		p.pvtdataStoreProvider.Close()
 	}
-	if p.vdbProvider != nil {
-		p.vdbProvider.Close()
+	if p.dbProvider != nil {
+		p.dbProvider.Close()
 	}
 	if p.bookkeepingProvider != nil {
 		p.bookkeepingProvider.Close()
@@ -405,7 +407,7 @@ func (p *Provider) recoverUnderConstructionLedger() {
 		return
 	}
 	logger.Infof("ledger [%s] found as under construction", ledgerID)
-	ledger, err := p.openInternal(ledgerID)
+	ledger, err := p.open(ledgerID)
 	panicOnErr(err, "Error while opening under construction ledger [%s]", ledgerID)
 	bcInfo, err := ledger.GetBlockchainInfo()
 	panicOnErr(err, "Error while getting blockchain info for the under construction ledger [%s]", ledgerID)
@@ -507,7 +509,7 @@ func (s *idStore) checkUpgradeEligibility() (bool, error) {
 		return false, err
 	}
 	if emptydb {
-		logger.Warnf("Ledger database %s is empty, nothing to upgrade.", s.dbPath)
+		logger.Warnf("Ledger database %s is empty, nothing to upgrade", s.dbPath)
 		return false, nil
 	}
 	format, err := s.db.Get(formatKey)
@@ -515,7 +517,7 @@ func (s *idStore) checkUpgradeEligibility() (bool, error) {
 		return false, err
 	}
 	if bytes.Equal(format, []byte(dataformat.CurrentFormat)) {
-		logger.Info("Ledger data format is current, nothing to upgrade.")
+		logger.Debugf("Ledger database %s has current data format, nothing to upgrade", s.dbPath)
 		return false, nil
 	}
 	if !bytes.Equal(format, []byte(dataformat.PreviousFormat)) {

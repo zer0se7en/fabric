@@ -8,10 +8,6 @@ package raft
 
 import (
 	"bytes"
-	"crypto/ecdsa"
-	"crypto/rand"
-	"crypto/x509"
-	"encoding/pem"
 	"fmt"
 	"io/ioutil"
 	"os"
@@ -26,6 +22,7 @@ import (
 	"github.com/hyperledger/fabric-protos-go/msp"
 	protosorderer "github.com/hyperledger/fabric-protos-go/orderer"
 	"github.com/hyperledger/fabric-protos-go/orderer/etcdraft"
+	"github.com/hyperledger/fabric/common/crypto/tlsgen"
 	"github.com/hyperledger/fabric/integration/nwo"
 	"github.com/hyperledger/fabric/integration/nwo/commands"
 	"github.com/hyperledger/fabric/internal/configtxgen/encoder"
@@ -56,7 +53,7 @@ var _ = Describe("EndToEnd reconfiguration and onboarding", func() {
 		ordererProcesses = nil
 
 		var err error
-		testDir, err = ioutil.TempDir("", "e2e-etcfraft_reconfig")
+		testDir, err = ioutil.TempDir("", "e2e-etcdraft_reconfig")
 		Expect(err).NotTo(HaveOccurred())
 
 		client, err = docker.NewClientFromEnv()
@@ -303,9 +300,10 @@ var _ = Describe("EndToEnd reconfiguration and onboarding", func() {
 			By("Waiting for a leader to be re-elected")
 			findLeader(ordererRunners)
 
-			// In the next part of the test we're going to bring up a third node with a different TLS root CA
-			// and we're going to add the TLS root CA *after* we add it to the channel, to ensure
-			// that we can dynamically update TLS root CAs in Raft while membership stays the same.
+			// In the next part of the test we're going to bring up a third node
+			// with a different TLS root CA. We're then going to remove the TLS
+			// root CA and restart the orderer, to ensure that we can dynamically
+			// update TLS root CAs in Raft while membership stays the same.
 
 			By("Creating configuration for a third orderer with a different TLS root CA")
 			orderer3 := &nwo.Orderer{
@@ -336,11 +334,7 @@ var _ = Describe("EndToEnd reconfiguration and onboarding", func() {
 			nameDomain := fmt.Sprintf("%s.%s", name, domain)
 			ordererTLSPath := filepath.Join(tmpDir, "ordererOrganizations", domain, "orderers", nameDomain, "tls")
 
-			caKeyPath := filepath.Join(tmpDir, "ordererOrganizations", domain, "tlsca", "priv_sk")
 			caCertPath := filepath.Join(tmpDir, "ordererOrganizations", domain, "tlsca", fmt.Sprintf("tlsca.%s-cert.pem", domain))
-
-			caKey, err := ioutil.ReadFile(caKeyPath)
-			Expect(err).NotTo(HaveOccurred())
 
 			caCert, err := ioutil.ReadFile(caCertPath)
 			Expect(err).NotTo(HaveOccurred())
@@ -348,9 +342,6 @@ var _ = Describe("EndToEnd reconfiguration and onboarding", func() {
 			thirdOrdererCertificatePath := filepath.Join(ordererTLSPath, "server.crt")
 			thirdOrdererCertificate, err := ioutil.ReadFile(thirdOrdererCertificatePath)
 			Expect(err).NotTo(HaveOccurred())
-
-			By("Changing its subject name")
-			caCert, thirdOrdererCertificate = changeSubjectName(caCert, caKey, thirdOrdererCertificate, "tlsca2")
 
 			By("Updating it on the file system")
 			err = ioutil.WriteFile(caCertPath, caCert, 0644)
@@ -369,20 +360,12 @@ var _ = Describe("EndToEnd reconfiguration and onboarding", func() {
 				Expect(err).NotTo(HaveOccurred())
 			}
 
-			By("Adding the third orderer to the channel")
-			addConsenter(network, peer, orderer, "systemchannel", etcdraft.Consenter{
-				ServerTlsCert: thirdOrdererCertificate,
-				ClientTlsCert: thirdOrdererCertificate,
-				Host:          "127.0.0.1",
-				Port:          uint32(network.OrdererPort(orderer3, nwo.ClusterPort)),
-			})
-
 			By("Obtaining the last config block from the orderer once more to update the bootstrap file")
 			configBlock = nwo.GetConfigBlock(network, peer, orderer, "systemchannel")
 			err = ioutil.WriteFile(filepath.Join(testDir, "systemchannel_block.pb"), protoutil.MarshalOrPanic(configBlock), 0644)
 			Expect(err).NotTo(HaveOccurred())
 
-			By("Launching the third orderer")
+			By("Launching orderer3")
 			launch(orderer3)
 
 			By("Expanding the TLS root CA certificates")
@@ -391,20 +374,67 @@ var _ = Describe("EndToEnd reconfiguration and onboarding", func() {
 				return config
 			})
 
+			By("Adding orderer3 to the channel")
+			addConsenter(network, peer, orderer, "systemchannel", etcdraft.Consenter{
+				ServerTlsCert: thirdOrdererCertificate,
+				ClientTlsCert: thirdOrdererCertificate,
+				Host:          "127.0.0.1",
+				Port:          uint32(network.OrdererPort(orderer3, nwo.ClusterPort)),
+			})
+
 			By("Waiting for orderer3 to see the leader")
-			leader := findLeader([]*ginkgomon.Runner{ordererRunners[2]})
-			leaderIndex := leader - 1
-
-			fmt.Fprint(GinkgoWriter, "Killing the leader", leader)
-			ordererProcesses[leaderIndex].Signal(syscall.SIGTERM)
-			Eventually(ordererProcesses[leaderIndex].Wait(), network.EventuallyTimeout).Should(Receive())
-
-			By("Ensuring orderer3 detects leader loss")
-			leaderLoss := fmt.Sprintf("Raft leader changed: %d -> 0", leader)
-			Eventually(ordererRunners[2].Err(), network.EventuallyTimeout, time.Second).Should(gbytes.Say(leaderLoss))
-
-			By("Waiting for the leader to be re-elected")
 			findLeader([]*ginkgomon.Runner{ordererRunners[2]})
+
+			By("Removing orderer3's TLS root CA certificate")
+			nwo.UpdateOrdererMSP(network, peer, orderer, "systemchannel", "OrdererOrg", func(config msp.FabricMSPConfig) msp.FabricMSPConfig {
+				config.TlsRootCerts = config.TlsRootCerts[:len(config.TlsRootCerts)-1]
+				return config
+			})
+
+			By("Killing orderer3")
+			o3Proc := ordererProcesses[2]
+			o3Proc.Signal(syscall.SIGKILL)
+			Eventually(o3Proc.Wait(), network.EventuallyTimeout).Should(Receive(MatchError("exit status 137")))
+
+			By("Restarting orderer3")
+			o3Runner := network.OrdererRunner(orderer3)
+			ordererRunners[2] = o3Runner
+			o3Proc = ifrit.Invoke(o3Runner)
+			Eventually(o3Proc.Ready(), network.EventuallyTimeout).Should(BeClosed())
+			ordererProcesses[2] = o3Proc
+
+			By("Ensuring TLS handshakes fail with the other orderers")
+			for i, oRunner := range ordererRunners {
+				if i < 2 {
+					Eventually(oRunner.Err(), network.EventuallyTimeout).Should(gbytes.Say("TLS handshake failed with error tls: failed to verify client certificate"))
+					continue
+				}
+				Eventually(oRunner.Err(), network.EventuallyTimeout).Should(gbytes.Say("TLS handshake failed with error remote error: tls: bad certificate"))
+				Eventually(oRunner.Err(), network.EventuallyTimeout).Should(gbytes.Say("Suspecting our own eviction from the channel"))
+			}
+
+			By("Attemping to add a consenter with invalid certs")
+			// create new certs that are not in the channel config
+			ca, err := tlsgen.NewCA()
+			Expect(err).NotTo(HaveOccurred())
+			client, err := ca.NewClientCertKeyPair()
+			Expect(err).NotTo(HaveOccurred())
+
+			current, updated := consenterAdder(
+				network,
+				peer,
+				orderer,
+				"systemchannel",
+				etcdraft.Consenter{
+					ServerTlsCert: client.Cert,
+					ClientTlsCert: client.Cert,
+					Host:          "127.0.0.1",
+					Port:          uint32(network.OrdererPort(orderer3, nwo.ListenPort)),
+				},
+			)
+			sess = nwo.UpdateOrdererConfigSession(network, orderer, network.SystemChannel.Name, current, updated, peer, orderer)
+			Eventually(sess, network.EventuallyTimeout).Should(gexec.Exit(1))
+			Expect(sess.Err).To(gbytes.Say(fmt.Sprintf("BAD_REQUEST -- error applying config update to existing channel 'systemchannel': consensus metadata update for channel config update is invalid: verifying tls client cert with serial number %d: x509: certificate signed by unknown authority", client.TLSCert.SerialNumber)))
 		})
 	})
 
@@ -1699,45 +1729,4 @@ func updateEtcdRaftMetadata(network *nwo.Network, peer *nwo.Peer, orderer *nwo.O
 		Expect(err).NotTo(HaveOccurred())
 		return newMetadata
 	})
-}
-
-func changeSubjectName(caCertPEM, caKeyPEM, leafPEM []byte, newSubjectName string) (newCA, newLeaf []byte) {
-	keyAsDER, _ := pem.Decode(caKeyPEM)
-	caKeyWithoutType, err := x509.ParsePKCS8PrivateKey(keyAsDER.Bytes)
-	Expect(err).NotTo(HaveOccurred())
-	caKey := caKeyWithoutType.(*ecdsa.PrivateKey)
-
-	caCertAsDER, _ := pem.Decode(caCertPEM)
-	caCert, err := x509.ParseCertificate(caCertAsDER.Bytes)
-	Expect(err).NotTo(HaveOccurred())
-
-	// Change its subject name
-	caCert.Subject.CommonName = newSubjectName
-	caCert.Issuer.CommonName = newSubjectName
-	caCert.RawTBSCertificate = nil
-	caCert.RawSubjectPublicKeyInfo = nil
-	caCert.Raw = nil
-	caCert.RawSubject = nil
-	caCert.RawIssuer = nil
-
-	// The CA signs its own certificate
-	caCertBytes, err := x509.CreateCertificate(rand.Reader, caCert, caCert, caCert.PublicKey, caKey)
-	Expect(err).NotTo(HaveOccurred())
-
-	// Now it's the turn of the leaf certificate
-	leafAsDER, _ := pem.Decode(leafPEM)
-	leafCert, err := x509.ParseCertificate(leafAsDER.Bytes)
-	Expect(err).NotTo(HaveOccurred())
-
-	leafCert.Raw = nil
-	leafCert.RawIssuer = nil
-	leafCert.RawTBSCertificate = nil
-
-	// The CA signs the leaf cert
-	leafCertBytes, err := x509.CreateCertificate(rand.Reader, leafCert, caCert, leafCert.PublicKey, caKey)
-	Expect(err).NotTo(HaveOccurred())
-
-	newCA = pem.EncodeToMemory(&pem.Block{Bytes: caCertBytes, Type: "CERTIFICATE"})
-	newLeaf = pem.EncodeToMemory(&pem.Block{Bytes: leafCertBytes, Type: "CERTIFICATE"})
-	return
 }

@@ -7,6 +7,7 @@ SPDX-License-Identifier: Apache-2.0
 package blkstorage
 
 import (
+	"hash"
 	"time"
 
 	"github.com/hyperledger/fabric-protos-go/common"
@@ -73,17 +74,27 @@ func (store *BlockStore) RetrieveTxByID(txID string) (*common.Envelope, error) {
 	return store.fileMgr.retrieveTransactionByID(txID)
 }
 
-// RetrieveTxByID returns a transaction for given transaction id
+// RetrieveTxByBlockNumTranNum returns a transaction for the given <blockNum, tranNum>
 func (store *BlockStore) RetrieveTxByBlockNumTranNum(blockNum uint64, tranNum uint64) (*common.Envelope, error) {
 	return store.fileMgr.retrieveTransactionByBlockNumTranNum(blockNum, tranNum)
 }
 
+// RetrieveBlockByTxID returns the block for the specified txID
 func (store *BlockStore) RetrieveBlockByTxID(txID string) (*common.Block, error) {
 	return store.fileMgr.retrieveBlockByTxID(txID)
 }
 
+// RetrieveTxValidationCodeByTxID returns the validation code for the specified txID
 func (store *BlockStore) RetrieveTxValidationCodeByTxID(txID string) (peer.TxValidationCode, error) {
 	return store.fileMgr.retrieveTxValidationCodeByTxID(txID)
+}
+
+// ExportTxIds creates two files in the specified dir and returns a map that contains
+// the mapping between the names of the files and their hashes.
+// Technically, the TxIDs appear in the sort order of radix-sort/shortlex. However,
+// since practically all the TxIDs are of same length, so the sort order would be the lexical sort order
+func (store *BlockStore) ExportTxIds(dir string, hasher hash.Hash) (map[string][]byte, error) {
+	return store.fileMgr.index.exportUniqueTxIDs(dir, hasher)
 }
 
 // Shutdown shuts down the block store

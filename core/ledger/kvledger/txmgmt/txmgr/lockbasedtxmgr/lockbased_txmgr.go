@@ -21,6 +21,7 @@ import (
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/privacyenabledstate"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/pvtstatepurgemgmt"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/queryutil"
+	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/rwsetutil"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/txmgr"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/validation"
 	"github.com/hyperledger/fabric/core/ledger/pvtdatapolicy"
@@ -34,7 +35,7 @@ var logger = flogging.MustGetLogger("lockbasedtxmgr")
 // This implementation uses a read-write lock to prevent conflicts between transaction simulation and committing
 type LockBasedTxMgr struct {
 	ledgerid            string
-	db                  privacyenabledstate.DB
+	db                  *privacyenabledstate.DB
 	pvtdataPurgeMgr     *pvtdataPurgeMgr
 	commitBatchPreparer *validation.CommitBatchPreparer
 	stateListeners      []ledger.StateListener
@@ -42,7 +43,14 @@ type LockBasedTxMgr struct {
 	commitRWLock        sync.RWMutex
 	oldBlockCommit      sync.Mutex
 	current             *current
-	hasher              ledger.Hasher
+	hashFunc            rwsetutil.HashFunc
+}
+
+// pvtdataPurgeMgr wraps the actual purge manager and an additional flag 'usedOnce'
+// for usage of this additional flag, see the relevant comments in the txmgr.Commit() function above
+type pvtdataPurgeMgr struct {
+	*pvtstatepurgemgmt.PurgeMgr
+	usedOnce bool
 }
 
 type current struct {
@@ -59,36 +67,46 @@ func (c *current) maxTxNumber() uint64 {
 	return uint64(len(c.block.Data.Data)) - 1
 }
 
-// NewLockBasedTxMgr constructs a new instance of NewLockBasedTxMgr
-func NewLockBasedTxMgr(
-	ledgerid string,
-	db privacyenabledstate.DB,
-	stateListeners []ledger.StateListener,
-	btlPolicy pvtdatapolicy.BTLPolicy,
-	bookkeepingProvider bookkeeping.Provider,
-	ccInfoProvider ledger.DeployedChaincodeInfoProvider,
-	customTxProcessors map[common.HeaderType]ledger.CustomTxProcessor,
-	hasher ledger.Hasher,
-) (*LockBasedTxMgr, error) {
+type Initializer struct {
+	LedgerID            string
+	DB                  *privacyenabledstate.DB
+	StateListeners      []ledger.StateListener
+	BtlPolicy           pvtdatapolicy.BTLPolicy
+	BookkeepingProvider bookkeeping.Provider
+	CCInfoProvider      ledger.DeployedChaincodeInfoProvider
+	CustomTxProcessors  map[common.HeaderType]ledger.CustomTxProcessor
+	HashFunc            rwsetutil.HashFunc
+}
 
-	if hasher == nil {
+// NewLockBasedTxMgr constructs a new instance of NewLockBasedTxMgr
+func NewLockBasedTxMgr(initializer *Initializer) (*LockBasedTxMgr, error) {
+
+	if initializer.HashFunc == nil {
 		return nil, errors.New("create new lock based TxMgr failed: passed in nil ledger hasher")
 	}
 
-	db.Open()
+	initializer.DB.Open()
 	txmgr := &LockBasedTxMgr{
-		ledgerid:       ledgerid,
-		db:             db,
-		stateListeners: stateListeners,
-		ccInfoProvider: ccInfoProvider,
-		hasher:         hasher,
+		ledgerid:       initializer.LedgerID,
+		db:             initializer.DB,
+		stateListeners: initializer.StateListeners,
+		ccInfoProvider: initializer.CCInfoProvider,
+		hashFunc:       initializer.HashFunc,
 	}
-	pvtstatePurgeMgr, err := pvtstatepurgemgmt.InstantiatePurgeMgr(ledgerid, db, btlPolicy, bookkeepingProvider)
+	pvtstatePurgeMgr, err := pvtstatepurgemgmt.InstantiatePurgeMgr(
+		initializer.LedgerID,
+		initializer.DB,
+		initializer.BtlPolicy,
+		initializer.BookkeepingProvider)
 	if err != nil {
 		return nil, err
 	}
 	txmgr.pvtdataPurgeMgr = &pvtdataPurgeMgr{pvtstatePurgeMgr, false}
-	txmgr.commitBatchPreparer = validation.NewCommitBatchPreparer(txmgr, db, customTxProcessors, hasher)
+	txmgr.commitBatchPreparer = validation.NewCommitBatchPreparer(
+		txmgr,
+		initializer.DB,
+		initializer.CustomTxProcessors,
+		initializer.HashFunc)
 	return txmgr, nil
 }
 
@@ -100,7 +118,7 @@ func (txmgr *LockBasedTxMgr) GetLastSavepoint() (*version.Height, error) {
 
 // NewQueryExecutor implements method in interface `txmgmt.TxMgr`
 func (txmgr *LockBasedTxMgr) NewQueryExecutor(txid string) (ledger.QueryExecutor, error) {
-	qe := newQueryExecutor(txmgr, txid, nil, true, txmgr.hasher)
+	qe := newQueryExecutor(txmgr, txid, nil, true, txmgr.hashFunc)
 	txmgr.commitRWLock.RLock()
 	return qe, nil
 }
@@ -116,7 +134,7 @@ func (txmgr *LockBasedTxMgr) NewQueryExecutor(txid string) (ledger.QueryExecutor
 // querying the ledger state so that the sequence of initialization is explicitly controlled.
 // However that needs a bigger refactoring of code.
 func (txmgr *LockBasedTxMgr) NewQueryExecutorNoCollChecks() (ledger.QueryExecutor, error) {
-	qe := newQueryExecutor(txmgr, "", nil, false, txmgr.hasher)
+	qe := newQueryExecutor(txmgr, "", nil, false, txmgr.hashFunc)
 	txmgr.commitRWLock.RLock()
 	return qe, nil
 }
@@ -124,7 +142,7 @@ func (txmgr *LockBasedTxMgr) NewQueryExecutorNoCollChecks() (ledger.QueryExecuto
 // NewTxSimulator implements method in interface `txmgmt.TxMgr`
 func (txmgr *LockBasedTxMgr) NewTxSimulator(txid string) (ledger.TxSimulator, error) {
 	logger.Debugf("constructing new tx simulator")
-	s, err := newTxSimulator(txmgr, txid, txmgr.hasher)
+	s, err := newTxSimulator(txmgr, txid, txmgr.hashFunc)
 	if err != nil {
 		return nil, err
 	}
@@ -224,8 +242,8 @@ func (txmgr *LockBasedTxMgr) RemoveStaleAndCommitPvtDataOfOldBlocks(reconciledPv
 	// to update the list. This is because RemoveStaleAndCommitPvtDataOfOldBlocks
 	// may have added new data which might be eligible for expiry during the
 	// next regular block commit.
-	logger.Debug("Updating bookkeeping info in the purge manager")
-	if err := txmgr.pvtdataPurgeMgr.UpdateBookkeepingForPvtDataOfOldBlocks(batch.PvtUpdates); err != nil {
+	logger.Debug("Updating expiry info in the purge manager")
+	if err := txmgr.pvtdataPurgeMgr.UpdateExpiryInfoOfPvtDataOfOldBlocks(batch.PvtUpdates); err != nil {
 		return err
 	}
 
@@ -313,7 +331,7 @@ func (uniquePvtData uniquePvtDataMap) updateUsingPvtWrite(pvtWrite *kvrwset.KVWr
 	}
 }
 
-func (uniquePvtData uniquePvtDataMap) findAndRemoveStalePvtData(db privacyenabledstate.DB) error {
+func (uniquePvtData uniquePvtDataMap) findAndRemoveStalePvtData(db *privacyenabledstate.DB) error {
 	// (1) load all committed versions
 	if err := uniquePvtData.loadCommittedVersionIntoCache(db); err != nil {
 		return err
@@ -332,7 +350,7 @@ func (uniquePvtData uniquePvtDataMap) findAndRemoveStalePvtData(db privacyenable
 	return nil
 }
 
-func (uniquePvtData uniquePvtDataMap) loadCommittedVersionIntoCache(db privacyenabledstate.DB) error {
+func (uniquePvtData uniquePvtDataMap) loadCommittedVersionIntoCache(db *privacyenabledstate.DB) error {
 	// Note that ClearCachedVersions would not be called till we validate and commit these
 	// pvt data of old blocks. This is because only during the exclusive lock duration, we
 	// clear the cache and we have already acquired one before reaching here.
@@ -351,7 +369,7 @@ func (uniquePvtData uniquePvtDataMap) loadCommittedVersionIntoCache(db privacyen
 }
 
 func checkIfPvtWriteIsStale(hashedKey *privacyenabledstate.HashedCompositeKey,
-	kvWrite *privacyenabledstate.PvtKVWrite, db privacyenabledstate.DB) (bool, error) {
+	kvWrite *privacyenabledstate.PvtKVWrite, db *privacyenabledstate.DB) (bool, error) {
 
 	ns := hashedKey.Namespace
 	coll := hashedKey.CollectionName
@@ -497,7 +515,12 @@ func (txmgr *LockBasedTxMgr) Commit() error {
 		panic("validateAndPrepare() method should have been called before calling commit()")
 	}
 
-	if err := txmgr.pvtdataPurgeMgr.DeleteExpiredAndUpdateBookkeeping(
+	if err := txmgr.pvtdataPurgeMgr.UpdateExpiryInfo(
+		txmgr.current.batch.PvtUpdates, txmgr.current.batch.HashUpdates); err != nil {
+		return err
+	}
+
+	if err := txmgr.pvtdataPurgeMgr.AddExpiredEntriesToUpdateBatch(
 		txmgr.current.batch.PvtUpdates, txmgr.current.batch.HashUpdates); err != nil {
 		return err
 	}
@@ -618,11 +641,4 @@ func (txmgr *LockBasedTxMgr) updateStateListeners() {
 
 func (txmgr *LockBasedTxMgr) reset() {
 	txmgr.current = nil
-}
-
-// pvtdataPurgeMgr wraps the actual purge manager and an additional flag 'usedOnce'
-// for usage of this additional flag, see the relevant comments in the txmgr.Commit() function above
-type pvtdataPurgeMgr struct {
-	pvtstatepurgemgmt.PurgeMgr
-	usedOnce bool
 }

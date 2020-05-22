@@ -16,7 +16,6 @@ import (
 	"github.com/hyperledger/fabric-protos-go/ledger/queryresult"
 	"github.com/hyperledger/fabric-protos-go/ledger/rwset"
 	"github.com/hyperledger/fabric-protos-go/peer"
-	"github.com/hyperledger/fabric/bccsp/sw"
 	"github.com/hyperledger/fabric/common/flogging"
 	"github.com/hyperledger/fabric/common/ledger/testutil"
 	"github.com/hyperledger/fabric/core/ledger"
@@ -47,7 +46,7 @@ type testEnv interface {
 	cleanup()
 	getName() string
 	getTxMgr() txmgr.TxMgr
-	getVDB() privacyenabledstate.DB
+	getVDB() *privacyenabledstate.DB
 	init(t *testing.T, testLedgerID string, btlPolicy pvtdatapolicy.BTLPolicy)
 	stopExternalResource()
 }
@@ -60,8 +59,8 @@ const (
 // Tests will be run against each environment in this array
 // For example, to skip CouchDB tests, remove the entry for couch environment
 var testEnvs = []testEnv{
-	&lockBasedEnv{name: levelDBtestEnvName, testDBEnv: &privacyenabledstate.LevelDBCommonStorageTestEnv{}},
-	&lockBasedEnv{name: couchDBtestEnvName, testDBEnv: &privacyenabledstate.CouchDBCommonStorageTestEnv{}},
+	&lockBasedEnv{name: levelDBtestEnvName, testDBEnv: &privacyenabledstate.LevelDBTestEnv{}},
+	&lockBasedEnv{name: couchDBtestEnvName, testDBEnv: &privacyenabledstate.CouchDBTestEnv{}},
 }
 
 var testEnvsMap = map[string]testEnv{
@@ -76,7 +75,7 @@ type lockBasedEnv struct {
 	name               string
 	t                  testing.TB
 	testBookkeepingEnv *bookkeeping.TestEnv
-	testDB             privacyenabledstate.DB
+	testDB             *privacyenabledstate.DB
 	testDBEnv          privacyenabledstate.TestEnv
 	txmgr              txmgr.TxMgr
 }
@@ -101,15 +100,17 @@ func (env *lockBasedEnv) init(t *testing.T, testLedgerID string, btlPolicy pvtda
 	}
 	env.testBookkeepingEnv = bookkeeping.NewTestEnv(t)
 
-	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
-	assert.NoError(t, err)
-	env.txmgr, err = NewLockBasedTxMgr(
-		testLedgerID, env.testDB, nil,
-		btlPolicy, env.testBookkeepingEnv.TestProvider,
-		&mock.DeployedChaincodeInfoProvider{},
-		nil,
-		cryptoProvider,
-	)
+	txmgrInitializer := &Initializer{
+		LedgerID:            testLedgerID,
+		DB:                  env.testDB,
+		StateListeners:      nil,
+		BtlPolicy:           btlPolicy,
+		BookkeepingProvider: env.testBookkeepingEnv.TestProvider,
+		CCInfoProvider:      &mock.DeployedChaincodeInfoProvider{},
+		CustomTxProcessors:  nil,
+		HashFunc:            testHashFunc,
+	}
+	env.txmgr, err = NewLockBasedTxMgr(txmgrInitializer)
 	assert.NoError(t, err)
 
 }
@@ -118,7 +119,7 @@ func (env *lockBasedEnv) getTxMgr() txmgr.TxMgr {
 	return env.txmgr
 }
 
-func (env *lockBasedEnv) getVDB() privacyenabledstate.DB {
+func (env *lockBasedEnv) getVDB() *privacyenabledstate.DB {
 	return env.testDB
 }
 

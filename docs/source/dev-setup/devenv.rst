@@ -4,50 +4,68 @@ Setting up the development environment
 Prerequisites
 ~~~~~~~~~~~~~
 
--  Git client
+-  `Git client <https://git-scm.com/downloads>`__
 -  `Go <https://golang.org/dl/>`__ version 1.14.x
 -  `Docker <https://docs.docker.com/get-docker/>`__ version 18.03 or later
--  (macOS)
-   `Xcode <https://itunes.apple.com/us/app/xcode/id497799835?mt=12>`__
-   must be installed
--  (macOS) GNU tar. You can use `Homebrew <https://brew.sh/>`__ to install
-   it as follows:
+-  (macOS) `Xcode Command Line Tools <https://developer.apple.com/downloads/>`__
+-  `SoftHSM <https://github.com/opendnssec/SoftHSMv2>`__
+-  `jq <https://stedolan.github.io/jq/download/>`__
 
-::
-
-    brew install gnu-tar
-
--  (macOS) If you've installed GNU tar, you should prepend the "gnubin"
-   directory to your $PATH with something like:
-
-::
-
-    export PATH=/usr/local/opt/gnu-tar/libexec/gnubin:$PATH
-
--  `Libtool <https://www.gnu.org/software/libtool/>`__. You can use
-   Homebrew to install it as follows:
-
-::
-
-    brew install libtool
-
--  `SoftHSM <https://github.com/opendnssec/SoftHSMv2>`__. You can use
-   Homebrew or apt to install it as follows:
-
-::
-
-    brew install softhsm              # macOS
-    sudo apt-get install libsofthsm2  # Ubuntu
-
--  `jq <https://stedolan.github.io/jq/download/>`__. You can use
-   Homebrew to install it as follows:
-
-::
-
-    brew install jq
 
 Steps
 ~~~~~
+
+Install the Prerequisites
+^^^^^^^^^^^^^^^^^^^^^^^^^
+
+For macOS, we recommend using `Homebrew <https://brew.sh>`__ to manage the
+development prereqs. The Xcode command line tools will be installed as part of
+the Homebrew installation.
+
+Once Homebrew is ready, installing the necessary prerequisites is very easy:
+
+::
+
+    brew install git go jq softhsm
+    brew cask install --appdir="/Applications" docker
+
+Docker Desktop must be launched to complete the installation so be sure to open
+the application after installing it:
+
+::
+
+    open /Applications/Docker.app
+
+Developing on Windows
+~~~~~~~~~~~~~~~~~~~~~
+
+On Windows 10 you should use the native Docker distribution and you
+may use the Windows PowerShell. However, for the ``binaries``
+command to succeed you will still need to have the ``uname`` command
+available. You can get it as part of Git but beware that only the
+64bit version is supported.
+
+Before running any ``git clone`` commands, run the following commands:
+
+::
+
+    git config --global core.autocrlf false
+    git config --global core.longpaths true
+
+You can check the setting of these parameters with the following commands:
+
+::
+
+    git config --get core.autocrlf
+    git config --get core.longpaths
+
+These need to be ``false`` and ``true`` respectively.
+
+The ``curl`` command that comes with Git and Docker Toolbox is old and
+does not handle properly the redirect used in
+:doc:`getting_started`. Make sure you have and use a newer version
+which can be downloaded from the `cURL downloads page
+<https://curl.haxx.se/download.html>`__
 
 Clone the Hyperledger Fabric source
 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
@@ -76,6 +94,7 @@ the repository.
     ::
 
         git config --global core.autocrlf false
+
 
 Configure SoftHSM
 ^^^^^^^^^^^^^^^^^
@@ -108,7 +127,7 @@ appropriate environment variables. For example, on macOS:
 
 ::
 
-    export PKCS11_LIB="/usr/local/Cellar/softhsm/2.5.0/lib/softhsm/libsofthsm2.so"
+    export PKCS11_LIB="/usr/local/Cellar/softhsm/2.6.1/lib/softhsm/libsofthsm2.so"
     export PKCS11_PIN=98765432
     export PKCS11_LABEL="ForFabric"
 
@@ -125,14 +144,16 @@ directory.
     make gotools
 
 After installing the tools, the build environment can be verified by running a
-a few commands.
+few commands.
 
 ::
 
-    make basic-checks docker-test-prereqs
+    make basic-checks integration-test-prereqs
     ginkgo -r ./integration/nwo
 
 If those commands completely successfully, you're ready to Go!
+
+If you plan to use the Hyperledger Fabric application SDKs then be sure to check out their prerequisites in the Node.js SDK `README <https://github.com/hyperledger/fabric-sdk-node#build-and-test>`__ and Java SDK `README <https://github.com/hyperledger/fabric-gateway-java/blob/master/README.md>`__.
 
 .. Licensed under Creative Commons Attribution 4.0 International License
    https://creativecommons.org/licenses/by/4.0/
