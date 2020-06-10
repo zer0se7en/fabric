@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io/ioutil"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/hyperledger/fabric/bccsp/sw"
@@ -139,11 +140,14 @@ func constructDefaultInitializer(testDir string) (*Initializer, error) {
 			HistoryDBConfig: &ledger.HistoryDBConfig{
 				Enabled: true,
 			},
+			SnapshotsConfig: &ledger.SnapshotsConfig{
+				RootDir: filepath.Join(testDir, "snapshots"),
+			},
 		},
 
 		MetricsProvider:               &disabled.Provider{},
 		DeployedChaincodeInfoProvider: &mock.DeployedChaincodeInfoProvider{},
-		Hasher:                        cryptoProvider,
+		HashProvider:                  cryptoProvider,
 	}, nil
 }
 

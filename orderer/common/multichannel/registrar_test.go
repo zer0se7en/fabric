@@ -7,7 +7,6 @@ SPDX-License-Identifier: Apache-2.0
 package multichannel
 
 import (
-	"github.com/hyperledger/fabric/orderer/common/types"
 	"io/ioutil"
 	"os"
 	"testing"
@@ -28,6 +27,7 @@ import (
 	"github.com/hyperledger/fabric/orderer/common/blockcutter"
 	"github.com/hyperledger/fabric/orderer/common/localconfig"
 	"github.com/hyperledger/fabric/orderer/common/multichannel/mocks"
+	"github.com/hyperledger/fabric/orderer/common/types"
 	"github.com/hyperledger/fabric/orderer/consensus"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
@@ -172,7 +172,10 @@ func TestNewRegistrar(t *testing.T) {
 		}, "Should not panic when starting without a system channel")
 		require.NotNil(t, manager)
 		list := manager.ChannelList()
-		assert.Equal(t, types.ChannelList{SystemChannel: nil, Channels: nil}, list)
+		assert.Equal(t, types.ChannelList{}, list)
+		info, err := manager.ChannelInfo("my-channel")
+		assert.EqualError(t, err, types.ErrChannelNotExist.Error())
+		assert.Equal(t, types.ChannelInfo{}, info)
 	})
 
 	// This test checks to make sure that the orderer refuses to come up if there are multiple system channels
@@ -231,6 +234,13 @@ func TestNewRegistrar(t *testing.T) {
 			list,
 		)
 
+		info, err := manager.ChannelInfo("testchannelid")
+		assert.NoError(t, err)
+		assert.Equal(t,
+			types.ChannelInfo{Name: "testchannelid", URL: "", ClusterRelation: "none", Status: "active", Height: 1},
+			info,
+		)
+
 		testMessageOrderAndRetrieval(confSys.Orderer.BatchSize.MaxMessageCount, "testchannelid", chainSupport, rl, t)
 	})
 }
@@ -251,7 +261,7 @@ func TestCreateChain(t *testing.T) {
 		lf, _ := newLedgerAndFactory(tmpdir, "testchannelid", genesisBlockSys)
 
 		consenters := make(map[string]consensus.Consenter)
-		consenters[confSys.Orderer.OrdererType] = &mockConsenter{}
+		consenters[confSys.Orderer.OrdererType] = &mockConsenter{cluster: true}
 
 		manager := NewRegistrar(localconfig.TopLevel{}, lf, mockCrypto(), &disabled.Provider{}, cryptoProvider)
 		manager.Initialize(consenters)
@@ -278,6 +288,20 @@ func TestCreateChain(t *testing.T) {
 			list,
 		)
 
+		info, err := manager.ChannelInfo("testchannelid")
+		assert.NoError(t, err)
+		assert.Equal(t,
+			types.ChannelInfo{Name: "testchannelid", URL: "", ClusterRelation: types.ClusterRelationMember, Status: types.StatusActive, Height: 1},
+			info,
+		)
+
+		info, err = manager.ChannelInfo("mychannel")
+		assert.NoError(t, err)
+		assert.Equal(t,
+			types.ChannelInfo{Name: "mychannel", URL: "", ClusterRelation: types.ClusterRelationMember, Status: types.StatusActive, Height: 1},
+			info,
+		)
+
 		// A subsequent creation, replaces the chain.
 		manager.CreateChain("mychannel")
 		chain2 := manager.GetChain("mychannel")
@@ -285,11 +309,11 @@ func TestCreateChain(t *testing.T) {
 		// They are not the same
 		assert.NotEqual(t, chain, chain2)
 		// The old chain is halted
-		_, ok := <-chain.Chain.(*mockChain).queue
+		_, ok := <-chain.Chain.(*mockChainCluster).queue
 		assert.False(t, ok)
 
 		// The new chain is not halted: Close the channel to prove that.
-		close(chain2.Chain.(*mockChain).queue)
+		close(chain2.Chain.(*mockChainCluster).queue)
 	})
 
 	// This test brings up the entire system, with the mock consenter, including the broadcasters etc. and creates a new chain
@@ -481,6 +505,62 @@ func TestBroadcastChannelSupport(t *testing.T) {
 		configTx := makeConfigTxFull("testchannelid", 1)
 		_, _, _, err = registrar.BroadcastChannelSupport(configTx)
 		assert.Error(t, err)
-		assert.Equal(t, "channel creation request not allowed because the orderer system channel is not yet defined", err.Error())
+		assert.Equal(t, "channel creation request not allowed because the orderer system channel is not defined", err.Error())
+	})
+}
+
+func TestRegistrar_JoinChannel(t *testing.T) {
+	// system channel
+	confSys := genesisconfig.Load(genesisconfig.SampleInsecureSoloProfile, configtest.GetDevConfigDir())
+	genesisBlockSys := encoder.New(confSys).GenesisBlockForChannel("sys-channel")
+	confApp := genesisconfig.Load(genesisconfig.SampleInsecureSoloProfile, configtest.GetDevConfigDir())
+	confApp.Consortiums = nil
+	confApp.Consortium = ""
+	genesisBlockApp := encoder.New(confApp).GenesisBlockForChannel("my-channel")
+
+	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
+	assert.NoError(t, err)
+
+	t.Run("Reject join when system channel exists", func(t *testing.T) {
+		tmpdir, err := ioutil.TempDir("", "registrar_test-")
+		require.NoError(t, err)
+		defer os.RemoveAll(tmpdir)
+
+		ledgerFactory, _ := newLedgerAndFactory(tmpdir, "sys-channel", genesisBlockSys)
+		mockConsenters := map[string]consensus.Consenter{confSys.Orderer.OrdererType: &mockConsenter{}}
+		registrar := NewRegistrar(localconfig.TopLevel{}, ledgerFactory, mockCrypto(), &disabled.Provider{}, cryptoProvider)
+		registrar.Initialize(mockConsenters)
+
+		info, err := registrar.JoinChannel("some-app-channel", &cb.Block{})
+		assert.EqualError(t, err, "system channel exists")
+		assert.Equal(t, types.ChannelInfo{}, info)
+	})
+
+	t.Run("Reject join when channel exists", func(t *testing.T) {
+		tmpdir, err := ioutil.TempDir("", "registrar_test-")
+		require.NoError(t, err)
+		defer os.RemoveAll(tmpdir)
+
+		ledgerFactory, _ := newLedgerAndFactory(tmpdir, "", nil)
+		mockConsenters := map[string]consensus.Consenter{confSys.Orderer.OrdererType: &mockConsenter{}}
+		config := localconfig.TopLevel{}
+		config.General.BootstrapMethod = "none"
+		config.General.GenesisFile = ""
+		registrar := NewRegistrar(config, ledgerFactory, mockCrypto(), &disabled.Provider{}, cryptoProvider)
+		registrar.Initialize(mockConsenters)
+
+		ledger, err := ledgerFactory.GetOrCreate("my-channel")
+		assert.NoError(t, err)
+		ledger.Append(genesisBlockApp)
+
+		// Before creating the chain, it doesn't exist
+		assert.Nil(t, registrar.GetChain("my-channel"))
+		// After creating the chain, it exists
+		registrar.CreateChain("my-channel")
+		assert.NotNil(t, registrar.GetChain("my-channel"))
+
+		info, err := registrar.JoinChannel("my-channel", &cb.Block{})
+		assert.EqualError(t, err, "channel already exists")
+		assert.Equal(t, types.ChannelInfo{}, info)
 	})
 }

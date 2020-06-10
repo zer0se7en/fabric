@@ -100,11 +100,6 @@ type docMetadata struct {
 	AttachmentsInfo map[string]*attachmentInfo `json:"_attachments"`
 }
 
-//docID is a minimal structure for capturing the ID from a query result
-type docID struct {
-	ID string `json:"_id"`
-}
-
 //queryResult is used for returning query results from CouchDB
 type queryResult struct {
 	id          string
@@ -155,12 +150,6 @@ type fileDetails struct {
 	Length      int    `json:"length"`
 }
 
-//couchDoc defines the structure for a JSON document value
-type couchDoc struct {
-	jsonValue   []byte
-	attachments []*attachmentInfo
-}
-
 //batchRetrieveDocMetadataResponse is used for processing REST batch responses from CouchDB
 type batchRetrieveDocMetadataResponse struct {
 	Rows []struct {
@@ -205,6 +194,21 @@ type databaseSecurity struct {
 		Names []string `json:"names"`
 		Roles []string `json:"roles"`
 	} `json:"members"`
+}
+
+//couchDoc defines the structure for a JSON document value
+type couchDoc struct {
+	jsonValue   []byte
+	attachments []*attachmentInfo
+}
+
+func (d *couchDoc) key() (string, error) {
+	m := make(jsonValue)
+	if err := json.Unmarshal(d.jsonValue, &m); err != nil {
+		return "", err
+	}
+	return m[idField].(string), nil
+
 }
 
 // closeResponseBody discards the body and then closes it to enable returning it to
@@ -521,20 +525,17 @@ func (dbclient *couchDatabase) dropDatabase() (*dbOperationResponse, error) {
 		return nil, errors.Wrap(decodeErr, "error decoding response body")
 	}
 
-	if dbResponse.Ok == true {
+	if dbResponse.Ok {
 		logger.Debugf("[%s] Dropped database", dbclient.dbName)
 	}
 
 	logger.Debugf("[%s] Exiting DropDatabase()", dbclient.dbName)
 
-	if dbResponse.Ok == true {
-
+	if dbResponse.Ok {
 		return dbResponse, nil
-
 	}
 
 	return dbResponse, errors.New("error dropping database")
-
 }
 
 // ensureFullCommit calls _ensure_full_commit for explicit fsync
@@ -578,10 +579,8 @@ func (dbclient *couchDatabase) ensureFullCommit() (*dbOperationResponse, error) 
 
 	logger.Debugf("[%s] Exiting EnsureFullCommit()", dbclient.dbName)
 
-	if dbResponse.Ok == true {
-
+	if dbResponse.Ok {
 		return dbResponse, nil
-
 	}
 
 	return dbResponse, errors.New("error syncing database")
@@ -604,7 +603,7 @@ func (dbclient *couchDatabase) saveDoc(id string, rev string, couchDoc *couchDoc
 	}
 
 	//Set up a buffer for the data to be pushed to couchdb
-	data := []byte{}
+	var data []byte
 
 	//Set up a default boundary for use by multipart if sending attachments
 	defaultBoundary := ""
@@ -616,7 +615,7 @@ func (dbclient *couchDatabase) saveDoc(id string, rev string, couchDoc *couchDoc
 	if couchDoc.attachments == nil {
 
 		//Test to see if this is a valid JSON
-		if isJSON(string(couchDoc.jsonValue)) != true {
+		if !isJSON(string(couchDoc.jsonValue)) {
 			return "", errors.New("JSON format is not valid")
 		}
 
@@ -626,7 +625,7 @@ func (dbclient *couchDatabase) saveDoc(id string, rev string, couchDoc *couchDoc
 	} else { // there are attachments
 
 		//attachments are included, create the multipart definition
-		multipartData, multipartBoundary, err3 := createAttachmentPart(couchDoc, defaultBoundary)
+		multipartData, multipartBoundary, err3 := createAttachmentPart(couchDoc)
 		if err3 != nil {
 			return "", err3
 		}
@@ -683,7 +682,7 @@ func (dbclient *couchDatabase) getDocumentRevision(id string) string {
 	return rev
 }
 
-func createAttachmentPart(couchDoc *couchDoc, defaultBoundary string) (bytes.Buffer, string, error) {
+func createAttachmentPart(couchDoc *couchDoc) (bytes.Buffer, string, error) {
 
 	//Create a buffer for writing the result
 	writeBuffer := new(bytes.Buffer)
@@ -692,7 +691,7 @@ func createAttachmentPart(couchDoc *couchDoc, defaultBoundary string) (bytes.Buf
 	writer := multipart.NewWriter(writeBuffer)
 
 	//retrieve the boundary for the multipart
-	defaultBoundary = writer.Boundary()
+	defaultBoundary := writer.Boundary()
 
 	fileAttachments := map[string]fileDetails{}
 
@@ -701,7 +700,8 @@ func createAttachmentPart(couchDoc *couchDoc, defaultBoundary string) (bytes.Buf
 	}
 
 	attachmentJSONMap := map[string]interface{}{
-		"_attachments": fileAttachments}
+		"_attachments": fileAttachments,
+	}
 
 	//Add any data uploaded with the files
 	if couchDoc.jsonValue != nil {
@@ -1237,7 +1237,7 @@ func (dbclient *couchDatabase) createIndex(indexdefinition string) (*createIndex
 	logger.Debugf("[%s] Entering CreateIndex()  indexdefinition=%s", dbName, indexdefinition)
 
 	//Test to see if this is a valid JSON
-	if isJSON(indexdefinition) != true {
+	if !isJSON(indexdefinition) {
 		return nil, errors.New("JSON format is not valid")
 	}
 
@@ -1735,11 +1735,10 @@ func (couchInstance *couchInstance) handleRequest(ctx context.Context, method, d
 		payloadData.ReadFrom(bytes.NewReader(data))
 
 		//Create request based on URL for couchdb operation
-		req, err := http.NewRequest(method, requestURL.String(), payloadData)
+		req, err := http.NewRequestWithContext(ctx, method, requestURL.String(), payloadData)
 		if err != nil {
 			return nil, nil, errors.Wrap(err, "error creating http request")
 		}
-		req.WithContext(ctx)
 
 		//set the request to close on completion if shared connections are not allowSharedConnection
 		//Current CouchDB has a problem with zero length attachments, do not allow the connection to be reused.

@@ -103,32 +103,40 @@ func (c *ConfigTx) UpdatedConfig() *cb.Config {
 	return c.updated
 }
 
-// ComputeUpdate computes the ConfigUpdate from a base and modified config transaction.
-func (c *ConfigTx) ComputeUpdate(channelID string) (*cb.ConfigUpdate, error) {
+// ComputeMarshaledUpdate computes the ConfigUpdate from a base and modified
+// config transaction and returns the marshaled bytes.
+func (c *ConfigTx) ComputeMarshaledUpdate(channelID string) ([]byte, error) {
 	if channelID == "" {
 		return nil, errors.New("channel ID is required")
 	}
 
-	updt, err := computeConfigUpdate(c.original, c.updated)
+	update, err := computeConfigUpdate(c.original, c.updated)
 	if err != nil {
 		return nil, fmt.Errorf("failed to compute update: %v", err)
 	}
 
-	updt.ChannelId = channelID
+	update.ChannelId = channelID
 
-	return updt, nil
-}
-
-// NewEnvelope creates an envelope with the provided config update and config signatures.
-func NewEnvelope(c *cb.ConfigUpdate, signatures ...*cb.ConfigSignature) (*cb.Envelope, error) {
-	cBytes, err := proto.Marshal(c)
+	marshaledUpdate, err := proto.Marshal(update)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling config update: %v", err)
 	}
 
+	return marshaledUpdate, nil
+}
+
+// NewEnvelope creates an envelope with the provided marshaled config update
+// and config signatures.
+func NewEnvelope(marshaledUpdate []byte, signatures ...*cb.ConfigSignature) (*cb.Envelope, error) {
 	configUpdateEnvelope := &cb.ConfigUpdateEnvelope{
-		ConfigUpdate: cBytes,
+		ConfigUpdate: marshaledUpdate,
 		Signatures:   signatures,
+	}
+
+	c := &cb.ConfigUpdate{}
+	err := proto.Unmarshal(marshaledUpdate, c)
+	if err != nil {
+		return nil, fmt.Errorf("unmarshaling config update: %v", err)
 	}
 
 	envelope, err := newEnvelope(cb.HeaderType_CONFIG_UPDATE, c.ChannelId, configUpdateEnvelope)
@@ -139,11 +147,10 @@ func NewEnvelope(c *cb.ConfigUpdate, signatures ...*cb.ConfigSignature) (*cb.Env
 	return envelope, nil
 }
 
-// NewCreateChannelTx creates a create channel config update transaction using the
-// provided application channel configuration.
-func NewCreateChannelTx(channelConfig Channel, channelID string) (*cb.ConfigUpdate, error) {
-	var err error
-
+// NewMarshaledCreateChannelTx creates a create channel config update
+// transaction using the provided application channel configuration and returns
+// the marshaled bytes.
+func NewMarshaledCreateChannelTx(channelConfig Channel, channelID string) ([]byte, error) {
 	if channelID == "" {
 		return nil, errors.New("profile's channel ID is required")
 	}
@@ -153,12 +160,16 @@ func NewCreateChannelTx(channelConfig Channel, channelID string) (*cb.ConfigUpda
 		return nil, fmt.Errorf("creating default config template: %v", err)
 	}
 
-	configUpdate, err := newChannelCreateConfigUpdate(channelID, channelConfig, ct)
+	update, err := newChannelCreateConfigUpdate(channelID, channelConfig, ct)
 	if err != nil {
 		return nil, fmt.Errorf("creating channel create config update: %v", err)
 	}
 
-	return configUpdate, nil
+	marshaledUpdate, err := proto.Marshal(update)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling config update: %v", err)
+	}
+	return marshaledUpdate, nil
 }
 
 // NewSystemChannelGenesisBlock creates a genesis block using the provided consortiums and orderer
@@ -225,15 +236,6 @@ func newSystemChannelGroup(channelConfig Channel) (*cb.ConfigGroup, error) {
 	}
 
 	err = setValue(channelGroup, blockDataHashingStructureValue(), AdminsPolicyKey)
-	if err != nil {
-		return nil, err
-	}
-
-	if len(channelConfig.Orderer.Addresses) == 0 {
-		return nil, errors.New("orderer endpoints is not defined in channel config")
-	}
-
-	err = setValue(channelGroup, ordererAddressesValue(channelConfig.Orderer.Addresses), ordererAdminsPolicyName)
 	if err != nil {
 		return nil, err
 	}
@@ -306,22 +308,6 @@ func implicitMetaFromString(input string) (*cb.ImplicitMetaPolicy, error) {
 	}
 
 	return res, nil
-}
-
-// ordererAddressesValue returns the a config definition for the orderer addresses.
-// It is a value for the /Channel group.
-func ordererAddressesValue(addresses []Address) *standardConfigValue {
-	var addrs []string
-	for _, a := range addresses {
-		addrs = append(addrs, fmt.Sprintf("%s:%d", a.Host, a.Port))
-	}
-
-	return &standardConfigValue{
-		key: OrdererAddressesKey,
-		value: &cb.OrdererAddresses{
-			Addresses: addrs,
-		},
-	}
 }
 
 // mspValue returns the config definition for an MSP.

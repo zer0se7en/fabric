@@ -9,8 +9,7 @@ package blkstorage
 import (
 	"bytes"
 	"fmt"
-	"hash"
-	"path"
+	"path/filepath"
 	"unicode/utf8"
 
 	"github.com/golang/protobuf/proto"
@@ -256,17 +255,10 @@ func (index *blockIndex) getTXLocByBlockNumTranNum(blockNum uint64, tranNum uint
 	return txFLP, nil
 }
 
-func (index *blockIndex) exportUniqueTxIDs(dir string, hasher hash.Hash) (map[string][]byte, error) {
+func (index *blockIndex) exportUniqueTxIDs(dir string, newHashFunc snapshot.NewHashFunc) (map[string][]byte, error) {
 	if !index.isAttributeIndexed(IndexableAttrTxID) {
 		return nil, ErrAttrNotIndexed
 	}
-
-	// create the data file
-	dataFile, err := snapshot.CreateFile(path.Join(dir, snapshotDataFileName), snapshotFileFormat, hasher)
-	if err != nil {
-		return nil, err
-	}
-	defer dataFile.Close()
 
 	dbItr := index.db.GetIterator([]byte{txIDIdxKeyPrefix}, []byte{txIDIdxKeyPrefix + 1})
 	defer dbItr.Release()
@@ -276,6 +268,8 @@ func (index *blockIndex) exportUniqueTxIDs(dir string, hasher hash.Hash) (map[st
 
 	var previousTxID string
 	var numTxIDs uint64 = 0
+	var dataFile *snapshot.FileWriter
+	var err error
 	for dbItr.Next() {
 		if err := dbItr.Error(); err != nil {
 			return nil, errors.Wrap(err, "internal leveldb error while iterating for txids")
@@ -289,10 +283,21 @@ func (index *blockIndex) exportUniqueTxIDs(dir string, hasher hash.Hash) (map[st
 			continue
 		}
 		previousTxID = txID
+		if numTxIDs == 0 { // first iteration, create the data file
+			dataFile, err = snapshot.CreateFile(filepath.Join(dir, snapshotDataFileName), snapshotFileFormat, newHashFunc)
+			if err != nil {
+				return nil, err
+			}
+			defer dataFile.Close()
+		}
 		if err := dataFile.EncodeString(txID); err != nil {
 			return nil, err
 		}
 		numTxIDs++
+	}
+
+	if dataFile == nil {
+		return nil, nil
 	}
 
 	dataHash, err := dataFile.Done()
@@ -301,8 +306,7 @@ func (index *blockIndex) exportUniqueTxIDs(dir string, hasher hash.Hash) (map[st
 	}
 
 	// create the metadata file
-	hasher.Reset()
-	metadataFile, err := snapshot.CreateFile(path.Join(dir, snapshotMetadataFileName), snapshotFileFormat, hasher)
+	metadataFile, err := snapshot.CreateFile(filepath.Join(dir, snapshotMetadataFileName), snapshotFileFormat, newHashFunc)
 	if err != nil {
 		return nil, err
 	}
@@ -312,6 +316,9 @@ func (index *blockIndex) exportUniqueTxIDs(dir string, hasher hash.Hash) (map[st
 		return nil, err
 	}
 	metadataHash, err := metadataFile.Done()
+	if err != nil {
+		return nil, err
+	}
 
 	return map[string][]byte{
 		snapshotDataFileName:     dataHash,

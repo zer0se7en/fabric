@@ -18,6 +18,7 @@ import (
 	"github.com/hyperledger/fabric/core/common/ccprovider"
 	"github.com/hyperledger/fabric/core/ledger/cceventmgmt"
 	"github.com/hyperledger/fabric/core/ledger/internal/version"
+	testmock "github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/privacyenabledstate/mock"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/statedb"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/statedb/statecouchdb"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/statedb/stateleveldb"
@@ -147,6 +148,7 @@ func testDB(t *testing.T, env TestEnv) {
 	assert.Nil(t, vv)
 
 	vv, err = db.GetValueHash("ns1", "coll1", util.ComputeStringHash("key1"))
+	assert.NoError(t, err)
 	assert.Nil(t, vv)
 }
 
@@ -311,7 +313,7 @@ func testQueryOnCouchDB(t *testing.T, env TestEnv) {
 	testQueryItr(t, itr, []string{testKey(1)}, []string{"jerry"})
 
 	// query using bad query string
-	itr, err = db.ExecuteQueryOnPrivateData("ns1", "coll1", "this is an invalid query string")
+	_, err = db.ExecuteQueryOnPrivateData("ns1", "coll1", "this is an invalid query string")
 	assert.Error(t, err, "Should have received an error for invalid query string")
 
 	// query returns 0 records
@@ -585,4 +587,51 @@ func generateLedgerID(t *testing.T) string {
 	_, err := io.ReadFull(rand.Reader, bytes)
 	assert.NoError(t, err)
 	return fmt.Sprintf("x%s", hex.EncodeToString(bytes))
+}
+
+//go:generate counterfeiter -o mock/channelinfo_provider.go -fake-name ChannelInfoProvider . channelInfoProviderWrapper
+
+// define this interface to break circular dependency
+type channelInfoProviderWrapper interface {
+	channelInfoProvider
+}
+
+func TestPossibleNamespaces(t *testing.T) {
+	namespacesAndCollections := map[string][]string{
+		"cc1":        {"_implicit_org_Org1MSP", "_implicit_org_Org2MSP", "collectionA", "collectionB"},
+		"cc2":        {"_implicit_org_Org1MSP", "_implicit_org_Org2MSP"},
+		"_lifecycle": {"_implicit_org_Org1MSP", "_implicit_org_Org2MSP"},
+		"lscc":       {},
+		"":           {},
+	}
+	expectedNamespaces := []string{
+		"cc1",
+		"cc1$$p_implicit_org_Org1MSP",
+		"cc1$$h_implicit_org_Org1MSP",
+		"cc1$$p_implicit_org_Org2MSP",
+		"cc1$$h_implicit_org_Org2MSP",
+		"cc1$$pcollectionA",
+		"cc1$$hcollectionA",
+		"cc1$$pcollectionB",
+		"cc1$$hcollectionB",
+		"cc2",
+		"cc2$$p_implicit_org_Org1MSP",
+		"cc2$$h_implicit_org_Org1MSP",
+		"cc2$$p_implicit_org_Org2MSP",
+		"cc2$$h_implicit_org_Org2MSP",
+		"_lifecycle",
+		"_lifecycle$$p_implicit_org_Org1MSP",
+		"_lifecycle$$h_implicit_org_Org1MSP",
+		"_lifecycle$$p_implicit_org_Org2MSP",
+		"_lifecycle$$h_implicit_org_Org2MSP",
+		"lscc",
+		"",
+	}
+
+	fakeChannelInfoProvider := &testmock.ChannelInfoProvider{}
+	fakeChannelInfoProvider.NamespacesAndCollectionsReturns(namespacesAndCollections, nil)
+	nsProvider := &namespaceProvider{fakeChannelInfoProvider}
+	namespaces, err := nsProvider.PossibleNamespaces(&statecouchdb.VersionedDB{})
+	require.NoError(t, err)
+	require.ElementsMatch(t, expectedNamespaces, namespaces)
 }

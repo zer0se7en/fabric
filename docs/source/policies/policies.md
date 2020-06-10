@@ -88,7 +88,7 @@ between organizations in the consortium.
 The policies in an application channel govern the ability to add or remove
 members from the channel. Application channels also govern which organizations
 are required to approve a chaincode before the chaincode is defined and
-committed to a channel using the Fabric chaincode lifecyle. When an application
+committed to a channel using the Fabric chaincode lifecycle. When an application
 channel is initially created, it inherits all the ordering service parameters
 from the orderer system channel by default. However, those parameters (and the
 policies governing them) can be customized in each channel.
@@ -100,7 +100,7 @@ which provide the ability to configure access to resources by associating those
 resources with existing policies. These "resources" could be functions on system
 chaincode (e.g., "GetBlockByNumber" on the "qscc" system chaincode) or other
 resources (e.g.,who can receive Block events). ACLs refer to policies
-defined in an application channel configuraton and extends them to control
+defined in an application channel configuration and extends them to control
 additional resources. The default set of Fabric ACLs is visible in the
 `configtx.yaml` file under the `Application: &ApplicationDefaults` section but
 they can and should be overridden in a production environment. The list of
@@ -360,7 +360,7 @@ The new process allows multiple organizations to vote on how a chaincode will
 be operated before it can be used on a channel. This is significant because it is
 the combination of this new lifecycle process and the policies that are
 specified during that process that dictate the security across the network. More details on
-the flow are available in the [Fabric chaincode lifecyle](../chaincode_lifecycle.html)
+the flow are available in the [Fabric chaincode lifecycle](../chaincode_lifecycle.html)
 concept topic, but for purposes of this topic you should understand how policies are
 used in this flow. The new flow includes two steps where policies are specified:
 when chaincode is **approved** by organization members, and when it is **committed**

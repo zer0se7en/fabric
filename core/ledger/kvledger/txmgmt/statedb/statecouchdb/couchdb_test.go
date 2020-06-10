@@ -284,7 +284,7 @@ func TestIsEmpty(t *testing.T) {
 	configCopy.Address = "junk"
 	configCopy.MaxRetries = 0
 	couchInstance.conf = &configCopy
-	isEmpty, err = couchInstance.isEmpty(ignore)
+	_, err = couchInstance.isEmpty(ignore)
 	require.Error(t, err)
 	require.Regexp(t, `unable to connect to CouchDB, check the hostname and port: http error calling couchdb: Get "?http://junk/_all_dbs"?`, err.Error())
 }
@@ -1655,4 +1655,21 @@ func TestURLWithSpecialCharacters(t *testing.T) {
 
 	assert.Equal(t, database, dbInfo.DbName)
 
+}
+
+func TestCouchDocKey(t *testing.T) {
+	m := make(jsonValue)
+	m[idField] = "key-1"
+	m[revField] = "rev-1"
+	m["a"] = "b"
+	json, err := json.Marshal(m)
+	require.NoError(t, err)
+	doc := &couchDoc{jsonValue: json}
+	actualKey, err := doc.key()
+	require.NoError(t, err)
+	require.Equal(t, "key-1", actualKey)
+
+	doc = &couchDoc{jsonValue: []byte("random")}
+	_, err = doc.key()
+	require.Error(t, err)
 }

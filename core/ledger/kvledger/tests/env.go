@@ -53,7 +53,7 @@ func newEnv(t *testing.T) *env {
 	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
 	assert.NoError(t, err)
 	return newEnvWithInitializer(t, &ledgermgmt.Initializer{
-		Hasher: cryptoProvider,
+		HashProvider: cryptoProvider,
 		EbMetadataProvider: &externalbuilder.MetadataProvider{
 			DurablePath: "testdata",
 		},
@@ -179,10 +179,6 @@ func (e *env) closeLedgerMgmt() {
 	e.ledgerMgr.Close()
 }
 
-func (e *env) getLedgerRootPath() string {
-	return e.initializer.Config.RootFSPath
-}
-
 func (e *env) getLevelstateDBPath() string {
 	return kvledger.StateDBPath(e.initializer.Config.RootFSPath)
 }
@@ -255,6 +251,11 @@ func populateMissingsWithTestDefaults(t *testing.T, initializer *ledgermgmt.Init
 			MaxBatchSize:    5000,
 			BatchesInterval: 1000,
 			PurgeInterval:   100,
+		}
+	}
+	if initializer.Config.SnapshotsConfig == nil {
+		initializer.Config.SnapshotsConfig = &ledger.SnapshotsConfig{
+			RootDir: filepath.Join(initializer.Config.RootFSPath, "snapshots"),
 		}
 	}
 }
