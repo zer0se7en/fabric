@@ -179,7 +179,7 @@ func (s *Store) initState() error {
 
 	if batchPending {
 		committingBlockNum := s.nextBlockNum()
-		batch := leveldbhelper.NewUpdateBatch()
+		batch := s.db.NewUpdateBatch()
 		batch.Put(lastCommittedBlkkey, encodeLastCommittedBlockVal(committingBlockNum))
 		batch.Delete(pendingCommitKey)
 		if err := s.db.WriteBatch(batch, true); err != nil {
@@ -214,7 +214,7 @@ func (s *Store) Commit(blockNum uint64, pvtData []*ledger.TxPvtData, missingPvtD
 		return &ErrIllegalArgs{fmt.Sprintf("Expected block number=%d, received block number=%d", expectedBlockNum, blockNum)}
 	}
 
-	batch := leveldbhelper.NewUpdateBatch()
+	batch := s.db.NewUpdateBatch()
 	var err error
 	var keyBytes, valBytes []byte
 
@@ -288,7 +288,7 @@ func (s *Store) CommitPvtDataOfOldBlocks(blocksPvtData map[uint64][]*ledger.TxPv
 
 	// (3) create a db update batch from the update entries
 	logger.Debug("Constructing update batch from pvtdatastore entries")
-	batch, err := constructUpdateBatchFromUpdateEntries(updateEntries)
+	batch, err := s.constructUpdateBatchFromUpdateEntries(updateEntries)
 	if err != nil {
 		return err
 	}
@@ -427,8 +427,8 @@ func (updateEntries *entriesForPvtDataOfOldBlocks) updateAndAddMissingDataEntry(
 	updateEntries.missingDataEntries[nsCollBlk] = missingData
 }
 
-func constructUpdateBatchFromUpdateEntries(updateEntries *entriesForPvtDataOfOldBlocks) (*leveldbhelper.UpdateBatch, error) {
-	batch := leveldbhelper.NewUpdateBatch()
+func (s *Store) constructUpdateBatchFromUpdateEntries(updateEntries *entriesForPvtDataOfOldBlocks) (*leveldbhelper.UpdateBatch, error) {
+	batch := s.db.NewUpdateBatch()
 
 	// add the following four types of entries to the update batch: (1) new data entries
 	// (i.e., pvtData), (2) updated expiry entries, (3) updated missing data entries, and
@@ -563,7 +563,7 @@ func (s *Store) getLastUpdatedOldBlocksList() ([]uint64, error) {
 
 // ResetLastUpdatedOldBlocksList removes the `lastUpdatedOldBlocksList` entry from the store
 func (s *Store) ResetLastUpdatedOldBlocksList() error {
-	batch := leveldbhelper.NewUpdateBatch()
+	batch := s.db.NewUpdateBatch()
 	batch.Delete(lastUpdatedOldBlocksKey)
 	if err := s.db.WriteBatch(batch, true); err != nil {
 		return err
@@ -586,7 +586,10 @@ func (s *Store) GetPvtDataByBlockNum(blockNum uint64, filter ledger.PvtNsCollFil
 	}
 	startKey, endKey := getDataKeysForRangeScanByBlockNum(blockNum)
 	logger.Debugf("Querying private data storage for write sets using startKey=%#v, endKey=%#v", startKey, endKey)
-	itr := s.db.GetIterator(startKey, endKey)
+	itr, err := s.db.GetIterator(startKey, endKey)
+	if err != nil {
+		return nil, err
+	}
 	defer itr.Release()
 
 	var blockPvtdata []*ledger.TxPvtData
@@ -658,7 +661,10 @@ func (s *Store) GetMissingPvtDataInfoForMostRecentBlocks(maxBlock int) (ledger.M
 	lastCommittedBlock := atomic.LoadUint64(&s.lastCommittedBlock)
 
 	startKey, endKey := createRangeScanKeysForEligibleMissingDataEntries(lastCommittedBlock)
-	dbItr := s.db.GetIterator(startKey, endKey)
+	dbItr, err := s.db.GetIterator(startKey, endKey)
+	if err != nil {
+		return nil, err
+	}
 	defer dbItr.Release()
 
 	for dbItr.Next() {
@@ -728,7 +734,7 @@ func (s *Store) ProcessCollsEligibilityEnabled(committingBlk uint64, nsCollMap m
 	if err != nil {
 		return err
 	}
-	batch := leveldbhelper.NewUpdateBatch()
+	batch := s.db.NewUpdateBatch()
 	batch.Put(key, val)
 	if err = s.db.WriteBatch(batch, true); err != nil {
 		return err
@@ -754,7 +760,7 @@ func (s *Store) performPurgeIfScheduled(latestCommittedBlk uint64) {
 }
 
 func (s *Store) purgeExpiredData(minBlkNum, maxBlkNum uint64) error {
-	batch := leveldbhelper.NewUpdateBatch()
+	batch := s.db.NewUpdateBatch()
 	expiryEntries, err := s.retrieveExpiryEntries(minBlkNum, maxBlkNum)
 	if err != nil || len(expiryEntries) == 0 {
 		return err
@@ -779,7 +785,10 @@ func (s *Store) purgeExpiredData(minBlkNum, maxBlkNum uint64) error {
 func (s *Store) retrieveExpiryEntries(minBlkNum, maxBlkNum uint64) ([]*expiryEntry, error) {
 	startKey, endKey := getExpiryKeysForRangeScan(minBlkNum, maxBlkNum)
 	logger.Debugf("retrieveExpiryEntries(): startKey=%#v, endKey=%#v", startKey, endKey)
-	itr := s.db.GetIterator(startKey, endKey)
+	itr, err := s.db.GetIterator(startKey, endKey)
+	if err != nil {
+		return nil, err
+	}
 	defer itr.Release()
 
 	var expiryEntries []*expiryEntry
@@ -801,24 +810,33 @@ func (s *Store) retrieveExpiryEntries(minBlkNum, maxBlkNum uint64) ([]*expiryEnt
 
 func (s *Store) launchCollElgProc() {
 	go func() {
-		s.processCollElgEvents() // process collection eligibility events when store is opened - in case there is an unprocessed events from previous run
+		if err := s.processCollElgEvents(); err != nil {
+			// process collection eligibility events when store is opened -
+			// in case there is an unprocessed events from previous run
+			logger.Errorw("failed to process collection eligibility events", "err", err)
+		}
 		for {
 			logger.Debugf("Waiting for collection eligibility event")
 			s.collElgProcSync.waitForNotification()
-			s.processCollElgEvents()
+			if err := s.processCollElgEvents(); err != nil {
+				logger.Errorw("failed to process collection eligibility events", "err", err)
+			}
 			s.collElgProcSync.done()
 		}
 	}()
 }
 
-func (s *Store) processCollElgEvents() {
+func (s *Store) processCollElgEvents() error {
 	logger.Debugf("Starting to process collection eligibility events")
 	s.purgerLock.Lock()
 	defer s.purgerLock.Unlock()
 	collElgStartKey, collElgEndKey := createRangeScanKeysForCollElg()
-	eventItr := s.db.GetIterator(collElgStartKey, collElgEndKey)
+	eventItr, err := s.db.GetIterator(collElgStartKey, collElgEndKey)
+	if err != nil {
+		return err
+	}
 	defer eventItr.Release()
-	batch := leveldbhelper.NewUpdateBatch()
+	batch := s.db.NewUpdateBatch()
 	totalEntriesConverted := 0
 
 	for eventItr.Next() {
@@ -835,7 +853,10 @@ func (s *Store) processCollElgEvents() {
 			for _, coll = range colls.Entries {
 				logger.Infof("Converting missing data entries from ineligible to eligible for [ns=%s, coll=%s]", ns, coll)
 				startKey, endKey := createRangeScanKeysForIneligibleMissingData(blkNum, ns, coll)
-				collItr := s.db.GetIterator(startKey, endKey)
+				collItr, err := s.db.GetIterator(startKey, endKey)
+				if err != nil {
+					return err
+				}
 				collEntriesConverted := 0
 
 				for collItr.Next() { // each entry
@@ -849,7 +870,7 @@ func (s *Store) processCollElgEvents() {
 					collEntriesConverted++
 					if batch.Len() > s.maxBatchSize {
 						s.db.WriteBatch(batch, true)
-						batch = leveldbhelper.NewUpdateBatch()
+						batch = s.db.NewUpdateBatch()
 						sleepTime := time.Duration(s.batchesInterval)
 						logger.Infof("Going to sleep for %d milliseconds between batches. Entries for [ns=%s, coll=%s] converted so far = %d",
 							sleepTime, ns, coll, collEntriesConverted)
@@ -869,6 +890,7 @@ func (s *Store) processCollElgEvents() {
 
 	s.db.WriteBatch(batch, true)
 	logger.Debugf("Converted [%d] ineligible missing data entries to eligible", totalEntriesConverted)
+	return nil
 }
 
 // LastCommittedBlockHeight returns the height of the last committed block
