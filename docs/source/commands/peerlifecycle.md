@@ -118,6 +118,7 @@ Flags:
       --connectionProfile string       The fully qualified path to the connection profile that provides the necessary connection information for the network. Note: currently only supported for providing peer connection information
   -h, --help                           help for install
       --peerAddresses stringArray      The addresses of the peers to connect to
+      --targetPeer string              When using a connection profile, the name of the peer to target for this action
       --tlsRootCertFiles stringArray   If TLS is enabled, the paths to the TLS root cert files of the peers to connect to. The order and number of certs specified should match the --peerAddresses flag
 
 Global Flags:
@@ -144,6 +145,7 @@ Flags:
   -h, --help                           help for queryinstalled
   -O, --output string                  The output format for query results. Default is human-readable plain-text. json is currently the only supported format.
       --peerAddresses stringArray      The addresses of the peers to connect to
+      --targetPeer string              When using a connection profile, the name of the peer to target for this action
       --tlsRootCertFiles stringArray   If TLS is enabled, the paths to the TLS root cert files of the peers to connect to. The order and number of certs specified should match the --peerAddresses flag
 
 Global Flags:
@@ -171,6 +173,7 @@ Flags:
       --output-directory string        The output directory to use when writing a chaincode install package to disk. Default is the current working directory.
       --package-id string              The identifier of the chaincode install package
       --peerAddresses stringArray      The addresses of the peers to connect to
+      --targetPeer string              When using a connection profile, the name of the peer to target for this action
       --tlsRootCertFiles stringArray   If TLS is enabled, the paths to the TLS root cert files of the peers to connect to. The order and number of certs specified should match the --peerAddresses flag
 
 Global Flags:
@@ -361,11 +364,13 @@ A chaincode needs to be packaged before it can be installed on your peers.
 This example uses the `peer lifecycle chaincode package` command to package
 a Go chaincode.
 
+  * Use the `--path` flag to indicate the location of the chaincode.
+    The path must be a fully qualified path or a path relative to your present working directory.
   * Use the `--label` flag to provide a chaincode package label of `myccv1`
     that your organization will use to identify the package.
 
     ```
-    peer lifecycle chaincode package mycc.tar.gz --path github.com/hyperledger/fabric-samples/chaincode/abstore/go/ --lang golang --label myccv1
+    peer lifecycle chaincode package mycc.tar.gz --path $CHAINCODE_DIR --lang golang --label myccv1
     ```
 
 ### peer lifecycle chaincode install example

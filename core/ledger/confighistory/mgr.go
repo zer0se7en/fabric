@@ -17,6 +17,7 @@ import (
 	"github.com/hyperledger/fabric/common/flogging"
 	"github.com/hyperledger/fabric/common/ledger/snapshot"
 	"github.com/hyperledger/fabric/core/ledger"
+	"github.com/hyperledger/fabric/internal/fileutil"
 	"github.com/pkg/errors"
 )
 
@@ -53,6 +54,7 @@ func (m *Mgr) Name() string {
 	return "collection configuration history listener"
 }
 
+// Initialize implements function from the interface ledger.StateListener
 func (m *Mgr) Initialize(ledgerID string, qe ledger.SimpleQueryExecutor) error {
 	// Noop
 	return nil
@@ -108,9 +110,21 @@ func (m *Mgr) HandleStateUpdates(trigger *ledger.StateUpdateTrigger) error {
 	return dbHandle.writeBatch(batch, true)
 }
 
+// ImportConfigHistory imports the collection config history associated with a given
+// ledgerID from the snapshot files present in the dir
 func (m *Mgr) ImportConfigHistory(ledgerID string, dir string) error {
+	exist, _, err := fileutil.FileExists(filepath.Join(dir, snapshotDataFileName))
+	if err != nil {
+		return err
+	}
+	if !exist {
+		// when the ledger being bootstapped never had a private data collection for
+		// any chaincode, the snapshot files associated with the confighistory store
+		// will not be present in the snapshot directory. Hence, we can return early
+		return nil
+	}
 	db := m.dbProvider.getDB(ledgerID)
-	empty, err := db.isEmpty()
+	empty, err := db.IsEmpty()
 	if err != nil {
 		return err
 	}
@@ -152,7 +166,8 @@ func (m *Mgr) ImportConfigHistory(ledgerID string, dir string) error {
 			if err := db.WriteBatch(batch, true); err != nil {
 				return err
 			}
-			batch = db.NewUpdateBatch()
+			currentBatchSize = 0
+			batch.Reset()
 		}
 	}
 	return db.WriteBatch(batch, true)
@@ -173,6 +188,7 @@ func (m *Mgr) Close() {
 	m.dbProvider.Close()
 }
 
+// Retriever helps consumer retrieve collection config history
 type Retriever struct {
 	ledgerInfoRetriever    LedgerInfoRetriever
 	ledgerID               string

@@ -11,8 +11,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
-	"crypto/tls"
-	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -36,8 +34,6 @@ import (
 	. "github.com/onsi/gomega"
 	"github.com/onsi/gomega/gbytes"
 	"github.com/onsi/gomega/gexec"
-	. "github.com/onsi/gomega/gstruct"
-	"github.com/onsi/gomega/types"
 	"github.com/tedsuo/ifrit"
 	"github.com/tedsuo/ifrit/ginkgomon"
 )
@@ -86,17 +82,17 @@ var _ = Describe("EndToEnd", func() {
 
 	Describe("basic solo network with 2 orgs and no docker", func() {
 		var (
-			datagramReader       *DatagramReader
+			metricsReader        *MetricsReader
 			runArtifactsFilePath string
 		)
 
 		BeforeEach(func() {
-			datagramReader = NewDatagramReader()
-			go datagramReader.Start()
+			metricsReader = NewMetricsReader()
+			go metricsReader.Start()
 
 			network = nwo.New(nwo.BasicSolo(), testDir, nil, StartPort(), components)
 			network.MetricsProvider = "statsd"
-			network.StatsdEndpoint = datagramReader.Address()
+			network.StatsdEndpoint = metricsReader.Address()
 			network.ChannelParticipationEnabled = true
 			network.Profiles = append(network.Profiles, &nwo.Profile{
 				Name:          "TwoOrgsBaseProfileChannel",
@@ -131,8 +127,8 @@ var _ = Describe("EndToEnd", func() {
 		})
 
 		AfterEach(func() {
-			if datagramReader != nil {
-				datagramReader.Close()
+			if metricsReader != nil {
+				metricsReader.Close()
 			}
 
 			// Terminate the processes but defer the network cleanup to the outer
@@ -160,7 +156,7 @@ var _ = Describe("EndToEnd", func() {
 
 			By("setting up the channel")
 			network.CreateAndJoinChannel(orderer, "testchannel")
-			channelParticipationList(network, orderer, []string{"testchannel"}, "systemchannel")
+			nwo.ChannelParticipationList(network, orderer, []string{"testchannel"}, "systemchannel")
 			nwo.EnableCapabilities(network, "testchannel", "Application", "V2_0", orderer, network.Peer("Org1", "peer0"), network.Peer("Org2", "peer0"))
 
 			By("attempting to install unsupported chaincode without docker")
@@ -198,14 +194,14 @@ var _ = Describe("EndToEnd", func() {
 			RunQueryInvokeQuery(network, orderer, peer, "testchannel")
 			RunRespondWith(network, orderer, peer, "testchannel")
 
-			By("waiting for DeliverFiltered stats to be emitted")
+			By("evaluating statsd metrics")
 			metricsWriteInterval := 5 * time.Second
-			Eventually(datagramReader, 2*metricsWriteInterval).Should(gbytes.Say("stream_request_duration.protos_Deliver.DeliverFiltered."))
+			CheckPeerStatsdStreamMetrics(metricsReader, 2*metricsWriteInterval)
+			CheckPeerStatsdMetrics("org1_peer0", metricsReader, 2*metricsWriteInterval)
+			CheckPeerStatsdMetrics("org2_peer0", metricsReader, 2*metricsWriteInterval)
 
-			CheckPeerStatsdStreamMetrics(datagramReader.String())
-			CheckPeerStatsdMetrics(datagramReader.String(), "org1_peer0")
-			CheckPeerStatsdMetrics(datagramReader.String(), "org2_peer0")
-			CheckOrdererStatsdMetrics(datagramReader.String(), "ordererorg_orderer")
+			By("checking for orderer metrics")
+			CheckOrdererStatsdMetrics("ordererorg_orderer", metricsReader, 2*metricsWriteInterval)
 
 			By("setting up a channel from a base profile")
 			additionalPeer := network.Peer("Org2", "peer0")
@@ -261,7 +257,7 @@ var _ = Describe("EndToEnd", func() {
 			orderer := network.Orderer("orderer")
 
 			network.CreateAndJoinChannel(orderer, "testchannel")
-			channelParticipationList(network, orderer, []string{"testchannel"}, "systemchannel")
+			nwo.ChannelParticipationList(network, orderer, []string{"testchannel"}, "systemchannel")
 			nwo.EnableCapabilities(network, "testchannel", "Application", "V2_0", orderer, network.Peer("Org1", "peer0"), network.Peer("Org2", "peer0"))
 
 			// package, install, and approve by org1 - module chaincode
@@ -397,7 +393,7 @@ var _ = Describe("EndToEnd", func() {
 
 			By("Create second channel and deploy chaincode")
 			network.CreateAndJoinChannel(orderer, "testchannel2")
-			channelParticipationList(network, orderer, []string{"testchannel", "testchannel2"}, "systemchannel")
+			nwo.ChannelParticipationList(network, orderer, []string{"testchannel", "testchannel2"}, "systemchannel")
 			peers := network.PeersWithChannel("testchannel2")
 			nwo.EnableCapabilities(network, "testchannel2", "Application", "V2_0", orderer, network.Peer("Org1", "peer0"), network.Peer("Org2", "peer0"))
 			nwo.ApproveChaincodeForMyOrg(network, "testchannel2", orderer, chaincode, peers...)
@@ -478,50 +474,6 @@ var _ = Describe("EndToEnd", func() {
 			// The below call waits for the config update to commit on the peer, so
 			// it will fail if the orderer addresses are wrong.
 			nwo.EnableCapabilities(network, "testchannel", "Application", "V2_0", orderer, network.Peer("Org1", "peer0"), network.Peer("Org2", "peer0"))
-		})
-	})
-
-	Describe("basic etcdraft network without a system channel", func() {
-		var ordererProcess ifrit.Process
-		BeforeEach(func() {
-			raftConfig := nwo.BasicEtcdRaft()
-			network = nwo.New(raftConfig, testDir, client, StartPort(), components)
-			network.ChannelParticipationEnabled = true
-			network.GenerateConfigTree()
-
-			orderer := network.Orderer("orderer")
-			ordererConfig := network.ReadOrdererConfig(orderer)
-			ordererConfig.General.BootstrapMethod = "none"
-			network.WriteOrdererConfig(orderer, ordererConfig)
-			network.Bootstrap()
-
-			ordererRunner := network.OrdererRunner(orderer)
-			ordererProcess = ifrit.Invoke(ordererRunner)
-			Eventually(ordererProcess.Ready, network.EventuallyTimeout).Should(BeClosed())
-			Eventually(ordererRunner.Err(), network.EventuallyTimeout).Should(gbytes.Say("Registrar initializing without a system channel, number of application channels: 0"))
-
-			channelParticipationList(network, orderer, nil)
-		})
-
-		AfterEach(func() {
-			if ordererProcess != nil {
-				ordererProcess.Signal(syscall.SIGTERM)
-				Eventually(ordererProcess.Wait(), network.EventuallyTimeout).Should(Receive())
-			}
-		})
-
-		It("starts the orderer but rejects channel creation requests", func() {
-			By("attempting to create a channel without a system channel defined")
-			sess, err := network.PeerAdminSession(network.Peer("Org1", "peer0"), commands.ChannelCreate{
-				ChannelID:   "testchannel",
-				Orderer:     network.OrdererAddress(network.Orderer("orderer"), nwo.ListenPort),
-				File:        network.CreateChannelTxPath("testchannel"),
-				OutputBlock: "/dev/null",
-				ClientAuth:  network.ClientAuthRequired,
-			})
-			Expect(err).NotTo(HaveOccurred())
-			Eventually(sess, network.EventuallyTimeout).Should(gexec.Exit(1))
-			Eventually(sess.Err, network.EventuallyTimeout).Should(gbytes.Say("channel creation request not allowed because the orderer system channel is not defined"))
 		})
 	})
 
@@ -687,80 +639,46 @@ func RunRespondWith(n *nwo.Network, orderer *nwo.Orderer, peer *nwo.Peer, channe
 	Expect(sess.Err).To(gbytes.Say(`Error: endorsement failure during invoke.`))
 }
 
-func CheckPeerStatsdMetrics(contents, prefix string) {
+func CheckPeerStatsdMetrics(prefix string, mr *MetricsReader, timeout time.Duration) {
 	By("checking for peer statsd metrics")
-	Expect(contents).To(ContainSubstring(prefix + ".logging.entries_checked.info:"))
-	Expect(contents).To(ContainSubstring(prefix + ".logging.entries_written.info:"))
-	Expect(contents).To(ContainSubstring(prefix + ".go.mem.gc_completed_count:"))
-	Expect(contents).To(ContainSubstring(prefix + ".grpc.server.unary_requests_received.protos_Endorser.ProcessProposal:"))
-	Expect(contents).To(ContainSubstring(prefix + ".grpc.server.unary_requests_completed.protos_Endorser.ProcessProposal.OK:"))
-	Expect(contents).To(ContainSubstring(prefix + ".grpc.server.unary_request_duration.protos_Endorser.ProcessProposal.OK:"))
-	Expect(contents).To(ContainSubstring(prefix + ".ledger.blockchain_height"))
-	Expect(contents).To(ContainSubstring(prefix + ".ledger.blockstorage_commit_time"))
-	Expect(contents).To(ContainSubstring(prefix + ".ledger.blockstorage_and_pvtdata_commit_time"))
+	Eventually(mr.String, timeout).Should(SatisfyAll(
+		ContainSubstring(prefix+".logging.entries_checked.info:"),
+		ContainSubstring(prefix+".logging.entries_written.info:"),
+		ContainSubstring(prefix+".go.mem.gc_completed_count:"),
+		ContainSubstring(prefix+".grpc.server.unary_requests_received.protos_Endorser.ProcessProposal:"),
+		ContainSubstring(prefix+".grpc.server.unary_requests_completed.protos_Endorser.ProcessProposal.OK:"),
+		ContainSubstring(prefix+".grpc.server.unary_request_duration.protos_Endorser.ProcessProposal.OK:"),
+		ContainSubstring(prefix+".ledger.blockchain_height"),
+		ContainSubstring(prefix+".ledger.blockstorage_commit_time"),
+		ContainSubstring(prefix+".ledger.blockstorage_and_pvtdata_commit_time"),
+	))
 }
 
-func CheckPeerStatsdStreamMetrics(contents string) {
+func CheckPeerStatsdStreamMetrics(mr *MetricsReader, timeout time.Duration) {
 	By("checking for stream metrics")
-	Expect(contents).To(ContainSubstring(".grpc.server.stream_requests_received.protos_Deliver.DeliverFiltered:"))
-	Expect(contents).To(ContainSubstring(".grpc.server.stream_requests_completed.protos_Deliver.DeliverFiltered.Unknown:"))
-	Expect(contents).To(ContainSubstring(".grpc.server.stream_request_duration.protos_Deliver.DeliverFiltered.Unknown:"))
-	Expect(contents).To(ContainSubstring(".grpc.server.stream_messages_received.protos_Deliver.DeliverFiltered"))
-	Expect(contents).To(ContainSubstring(".grpc.server.stream_messages_sent.protos_Deliver.DeliverFiltered"))
+	Eventually(mr.String, timeout).Should(SatisfyAll(
+		ContainSubstring(".grpc.server.stream_requests_received.protos_Deliver.DeliverFiltered:"),
+		ContainSubstring(".grpc.server.stream_requests_completed.protos_Deliver.DeliverFiltered.Unknown:"),
+		ContainSubstring(".grpc.server.stream_request_duration.protos_Deliver.DeliverFiltered.Unknown:"),
+		ContainSubstring(".grpc.server.stream_messages_received.protos_Deliver.DeliverFiltered"),
+		ContainSubstring(".grpc.server.stream_messages_sent.protos_Deliver.DeliverFiltered"),
+	))
 }
 
-func CheckOrdererStatsdMetrics(contents, prefix string) {
-	By("checking for AtomicBroadcast")
-	Expect(contents).To(ContainSubstring(prefix + ".grpc.server.stream_request_duration.orderer_AtomicBroadcast.Broadcast.OK"))
-	Expect(contents).To(ContainSubstring(prefix + ".grpc.server.stream_request_duration.orderer_AtomicBroadcast.Deliver."))
-
-	By("checking for orderer metrics")
-	Expect(contents).To(ContainSubstring(prefix + ".logging.entries_checked.info:"))
-	Expect(contents).To(ContainSubstring(prefix + ".logging.entries_written.info:"))
-	Expect(contents).To(ContainSubstring(prefix + ".go.mem.gc_completed_count:"))
-	Expect(contents).To(ContainSubstring(prefix + ".grpc.server.stream_requests_received.orderer_AtomicBroadcast.Deliver:"))
-	Expect(contents).To(ContainSubstring(prefix + ".grpc.server.stream_requests_completed.orderer_AtomicBroadcast.Deliver."))
-	Expect(contents).To(ContainSubstring(prefix + ".grpc.server.stream_messages_received.orderer_AtomicBroadcast.Deliver"))
-	Expect(contents).To(ContainSubstring(prefix + ".grpc.server.stream_messages_sent.orderer_AtomicBroadcast.Deliver"))
-	Expect(contents).To(ContainSubstring(prefix + ".ledger.blockchain_height"))
-	Expect(contents).To(ContainSubstring(prefix + ".ledger.blockstorage_commit_time"))
-}
-
-func OrdererOperationalClients(network *nwo.Network, orderer *nwo.Orderer) (authClient, unauthClient *http.Client) {
-	return operationalClients(network.OrdererLocalTLSDir(orderer))
-}
-
-func PeerOperationalClients(network *nwo.Network, peer *nwo.Peer) (authClient, unauthClient *http.Client) {
-	return operationalClients(network.PeerLocalTLSDir(peer))
-}
-
-func operationalClients(tlsDir string) (authClient, unauthClient *http.Client) {
-	clientCert, err := tls.LoadX509KeyPair(
-		filepath.Join(tlsDir, "server.crt"),
-		filepath.Join(tlsDir, "server.key"),
-	)
-	Expect(err).NotTo(HaveOccurred())
-
-	clientCertPool := x509.NewCertPool()
-	caCert, err := ioutil.ReadFile(filepath.Join(tlsDir, "ca.crt"))
-	Expect(err).NotTo(HaveOccurred())
-	clientCertPool.AppendCertsFromPEM(caCert)
-
-	authenticatedClient := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{
-				Certificates: []tls.Certificate{clientCert},
-				RootCAs:      clientCertPool,
-			},
-		},
-	}
-	unauthenticatedClient := &http.Client{
-		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{RootCAs: clientCertPool},
-		},
-	}
-
-	return authenticatedClient, unauthenticatedClient
+func CheckOrdererStatsdMetrics(prefix string, mr *MetricsReader, timeout time.Duration) {
+	Eventually(mr.String, timeout).Should(SatisfyAll(
+		ContainSubstring(prefix+".grpc.server.stream_request_duration.orderer_AtomicBroadcast.Broadcast.OK"),
+		ContainSubstring(prefix+".grpc.server.stream_request_duration.orderer_AtomicBroadcast.Deliver."),
+		ContainSubstring(prefix+".logging.entries_checked.info:"),
+		ContainSubstring(prefix+".logging.entries_written.info:"),
+		ContainSubstring(prefix+".go.mem.gc_completed_count:"),
+		ContainSubstring(prefix+".grpc.server.stream_requests_received.orderer_AtomicBroadcast.Deliver:"),
+		ContainSubstring(prefix+".grpc.server.stream_requests_completed.orderer_AtomicBroadcast.Deliver."),
+		ContainSubstring(prefix+".grpc.server.stream_messages_received.orderer_AtomicBroadcast.Deliver"),
+		ContainSubstring(prefix+".grpc.server.stream_messages_sent.orderer_AtomicBroadcast.Deliver"),
+		ContainSubstring(prefix+".ledger.blockchain_height"),
+		ContainSubstring(prefix+".ledger.blockstorage_commit_time"),
+	))
 }
 
 func CheckPeerOperationEndpoints(network *nwo.Network, peer *nwo.Peer) {
@@ -768,7 +686,7 @@ func CheckPeerOperationEndpoints(network *nwo.Network, peer *nwo.Peer) {
 	logspecURL := fmt.Sprintf("https://127.0.0.1:%d/logspec", network.PeerPort(peer, nwo.OperationsPort))
 	healthURL := fmt.Sprintf("https://127.0.0.1:%d/healthz", network.PeerPort(peer, nwo.OperationsPort))
 
-	authClient, unauthClient := PeerOperationalClients(network, peer)
+	authClient, unauthClient := nwo.PeerOperationalClients(network, peer)
 
 	CheckPeerPrometheusMetrics(authClient, metricsURL)
 	CheckLogspecOperations(authClient, logspecURL)
@@ -788,7 +706,7 @@ func CheckOrdererOperationEndpoints(network *nwo.Network, orderer *nwo.Orderer) 
 	logspecURL := fmt.Sprintf("https://127.0.0.1:%d/logspec", network.OrdererPort(orderer, nwo.OperationsPort))
 	healthURL := fmt.Sprintf("https://127.0.0.1:%d/healthz", network.OrdererPort(orderer, nwo.OperationsPort))
 
-	authClient, unauthClient := OrdererOperationalClients(network, orderer)
+	authClient, unauthClient := nwo.OrdererOperationalClients(network, orderer)
 
 	CheckOrdererPrometheusMetrics(authClient, metricsURL)
 	CheckLogspecOperations(authClient, logspecURL)
@@ -924,111 +842,4 @@ func hashFile(file string) string {
 
 func chaincodeContainerNameFilter(n *nwo.Network, chaincode nwo.Chaincode) string {
 	return fmt.Sprintf("^/%s-.*-%s-%s$", n.NetworkID, chaincode.Label, hashFile(chaincode.PackageFile))
-}
-
-type channelList struct {
-	SystemChannel *channelInfoShort  `json:"systemChannel"`
-	Channels      []channelInfoShort `json:"channels"`
-}
-
-type channelInfoShort struct {
-	Name string `json:"name"`
-	URL  string `json:"url"`
-}
-
-func channelParticipationList(n *nwo.Network, o *nwo.Orderer, expectedChannels []string, systemChannel ...string) {
-	authClient, unauthClient := OrdererOperationalClients(n, o)
-	listChannelsURL := fmt.Sprintf("https://127.0.0.1:%d/participation/v1/channels", n.OrdererPort(o, nwo.OperationsPort))
-
-	By("using the channel participation API to list the channels")
-	body := getBody(authClient, listChannelsURL)()
-	list := &channelList{}
-	err := json.Unmarshal([]byte(body), list)
-	Expect(err).NotTo(HaveOccurred())
-
-	Expect(*list).To(MatchFields(IgnoreExtras, Fields{
-		"Channels":      channelsMatcher(expectedChannels),
-		"SystemChannel": systemChannelMatcher(systemChannel...),
-	}))
-
-	By("listing the channels without a client cert")
-	resp, err := unauthClient.Get(listChannelsURL)
-	Expect(err).NotTo(HaveOccurred())
-	Expect(resp.StatusCode).To(Equal(http.StatusUnauthorized))
-
-	// for the current test scenarios, we only have these two cluster relations.
-	// other possible values are "follower" and "config-tracker"
-	// TODO generalize and relocate this after join operations are usable/testable
-	clusterRelation := func(consensusType string) string {
-		if consensusType == "etcdraft" {
-			return "member"
-		}
-		return "none"
-	}
-
-	for _, channel := range list.Channels {
-		By("listing the details for channel " + channel.Name)
-		expectedChannelInfo := &channelInfo{
-			Name:            channel.Name,
-			URL:             fmt.Sprintf("/participation/v1/channels/%s", channel.Name),
-			Status:          "active",
-			ClusterRelation: clusterRelation(n.Consensus.Type),
-		}
-
-		if len(n.PeersWithChannel(channel.Name)) > 0 {
-			// get max peer height for the channel since there isn't a way to
-			// directly get the orderer's height that I'm aware of beyond the channel
-			// participation API (and maybe metrics?)
-			maxPeerHeight := nwo.GetMaxLedgerHeight(n, channel.Name, n.PeersWithChannel(channel.Name)...)
-			expectedChannelInfo.Height = uint64(maxPeerHeight)
-		}
-
-		channelParticipationListOne(n, o, channel.URL, expectedChannelInfo)
-	}
-}
-
-func channelsMatcher(channels []string) types.GomegaMatcher {
-	if len(channels) == 0 {
-		return BeEmpty()
-	}
-	matchers := make([]types.GomegaMatcher, len(channels))
-	for i, channel := range channels {
-		matchers[i] = channelInfoShortMatcher(channel)
-	}
-	return ConsistOf(matchers)
-}
-
-func systemChannelMatcher(systemChannel ...string) types.GomegaMatcher {
-	if len(systemChannel) == 0 {
-		return BeNil()
-	}
-	return PointTo(channelInfoShortMatcher(systemChannel[0]))
-}
-
-func channelInfoShortMatcher(channel string) types.GomegaMatcher {
-	return MatchFields(IgnoreExtras, Fields{
-		"Name": Equal(channel),
-		"URL":  Equal(fmt.Sprintf("/participation/v1/channels/%s", channel)),
-	})
-}
-
-type channelInfo struct {
-	Name            string `json:"name"`
-	URL             string `json:"url"`
-	Status          string `json:"status"`
-	ClusterRelation string `json:"clusterRelation"`
-	Height          uint64 `json:"height"`
-}
-
-func channelParticipationListOne(n *nwo.Network, o *nwo.Orderer, channelURL string, expectedChannelInfo *channelInfo) {
-	authClient, _ := OrdererOperationalClients(n, o)
-	listChannelURL := fmt.Sprintf("https://127.0.0.1:%d/%s", n.OrdererPort(o, nwo.OperationsPort), channelURL)
-
-	By("using the channel participation API to list the details of a single channel")
-	body := getBody(authClient, listChannelURL)()
-	c := &channelInfo{}
-	err := json.Unmarshal([]byte(body), c)
-	Expect(err).NotTo(HaveOccurred())
-
-	Expect(c).To(Equal(expectedChannelInfo))
 }
