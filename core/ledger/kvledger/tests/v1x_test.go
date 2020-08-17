@@ -241,7 +241,7 @@ func TestV13WithStateCouchdb(t *testing.T) {
 
 	couchdbConfig, cleanup := startCouchDBWithV13Data(t, ledgerFSRoot)
 	defer cleanup()
-	env.initializer.Config.StateDBConfig.StateDatabase = "CouchDB"
+	env.initializer.Config.StateDBConfig.StateDatabase = ledger.CouchDB
 	env.initializer.Config.StateDBConfig.CouchDB = couchdbConfig
 	env.initializer.HealthCheckRegistry = &mock.HealthCheckRegistry{}
 	env.initializer.ChaincodeLifecycleEventProvider = &mock.ChaincodeLifecycleEventProvider{}
@@ -293,7 +293,7 @@ func TestInitLedgerPanicWithV13Data(t *testing.T) {
 
 	couchdbConfig, cleanup := startCouchDBWithV13Data(t, ledgerFSRoot)
 	defer cleanup()
-	env.initializer.Config.StateDBConfig.StateDatabase = "CouchDB"
+	env.initializer.Config.StateDBConfig.StateDatabase = ledger.CouchDB
 	env.initializer.Config.StateDBConfig.CouchDB = couchdbConfig
 	env.initializer.HealthCheckRegistry = &mock.HealthCheckRegistry{}
 	env.initializer.ChaincodeLifecycleEventProvider = &mock.ChaincodeLifecycleEventProvider{}
@@ -369,7 +369,7 @@ func startCouchDBWithV13Data(t *testing.T, ledgerFSRoot string) (*ledger.CouchDB
 	// prepare the local.d mount dir to overwrite the number of shards and nodes so that they match the couchdb data generated from v1.3
 	localdHostDir := filepath.Join(ledgerFSRoot, "local.d")
 	require.NoError(t, os.MkdirAll(localdHostDir, os.ModePerm))
-	testutil.CopyDir("testdata/v13_statecouchdb/couchdb_etc/local.d", localdHostDir, true)
+	require.NoError(t, testutil.CopyDir("testdata/v13_statecouchdb/couchdb_etc/local.d", localdHostDir, true))
 
 	// start couchdb using couchdbDataUnzipDir and localdHostDir as mount dirs
 	couchdbBinds := []string{

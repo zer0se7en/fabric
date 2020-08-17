@@ -31,7 +31,6 @@ import (
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/onsi/gomega"
 	"github.com/pkg/errors"
-	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -108,7 +107,7 @@ func (d *countingDialer) assertAllConnectionsClosed(t *testing.T) {
 	for atomic.LoadUint32(&d.connectionCount) != uint32(0) && time.Now().Before(timeLimit) {
 		time.Sleep(time.Millisecond)
 	}
-	assert.Equal(t, uint32(0), atomic.LoadUint32(&d.connectionCount))
+	require.Equal(t, uint32(0), atomic.LoadUint32(&d.connectionCount))
 }
 
 func (d *countingDialer) Dial(address cluster.EndpointCriteria) (*grpc.ClientConn, error) {
@@ -239,10 +238,10 @@ func (ds *deliverServer) setBlocks(blocks chan *orderer.DeliverResponse) {
 
 func (ds *deliverServer) port() int {
 	_, portStr, err := net.SplitHostPort(ds.srv.Address())
-	assert.NoError(ds.t, err)
+	require.NoError(ds.t, err)
 
 	port, err := strconv.ParseInt(portStr, 10, 32)
-	assert.NoError(ds.t, err)
+	require.NoError(ds.t, err)
 	return int(port)
 }
 
@@ -257,7 +256,7 @@ func (ds *deliverServer) resurrect() {
 	ds.srv.Stop()
 	// And re-create the gRPC server on that port
 	ds.srv, err = comm.NewGRPCServer(fmt.Sprintf("127.0.0.1:%d", ds.port()), comm.ServerConfig{})
-	assert.NoError(ds.t, err)
+	require.NoError(ds.t, err)
 	orderer.RegisterAtomicBroadcastServer(ds.srv.Server(), ds)
 	go ds.srv.Start()
 }
@@ -275,8 +274,8 @@ func (ds *deliverServer) enqueueResponse(seq uint64) {
 
 func (ds *deliverServer) addExpectProbeAssert() {
 	ds.seekAssertions <- func(info *orderer.SeekInfo, _ string) {
-		assert.NotNil(ds.t, info.GetStart().GetNewest())
-		assert.Equal(ds.t, info.ErrorResponse, orderer.SeekInfo_BEST_EFFORT)
+		require.NotNil(ds.t, info.GetStart().GetNewest())
+		require.Equal(ds.t, info.ErrorResponse, orderer.SeekInfo_BEST_EFFORT)
 	}
 }
 
@@ -286,8 +285,8 @@ func (ds *deliverServer) addExpectPullAssert(seq uint64) {
 		require.NotNil(ds.t, seekPosition)
 		seekSpecified := seekPosition.GetSpecified()
 		require.NotNil(ds.t, seekSpecified)
-		assert.Equal(ds.t, seq, seekSpecified.Number)
-		assert.Equal(ds.t, info.ErrorResponse, orderer.SeekInfo_BEST_EFFORT)
+		require.Equal(ds.t, seq, seekSpecified.Number)
+		require.Equal(ds.t, info.ErrorResponse, orderer.SeekInfo_BEST_EFFORT)
 	}
 }
 
@@ -350,9 +349,9 @@ func TestBlockPullerBasicHappyPath(t *testing.T) {
 	}
 
 	for i := 5; i <= 10; i++ {
-		assert.Equal(t, uint64(i), bp.PullBlock(uint64(i)).Header.Number)
+		require.Equal(t, uint64(i), bp.PullBlock(uint64(i)).Header.Number)
 	}
-	assert.Len(t, osn.blockResponses, 0)
+	require.Len(t, osn.blockResponses, 0)
 
 	bp.Close()
 	dialer.assertAllConnectionsClosed(t)
@@ -383,9 +382,9 @@ func TestBlockPullerDuplicate(t *testing.T) {
 	}
 
 	for i := 1; i <= 3; i++ {
-		assert.Equal(t, uint64(i), bp.PullBlock(uint64(i)).Header.Number)
+		require.Equal(t, uint64(i), bp.PullBlock(uint64(i)).Header.Number)
 	}
-	assert.Len(t, osn.blockResponses, 0)
+	require.Len(t, osn.blockResponses, 0)
 
 	bp.Close()
 	dialer.assertAllConnectionsClosed(t)
@@ -434,11 +433,11 @@ func TestBlockPullerHeavyBlocks(t *testing.T) {
 	for i := uint64(0); i < 5; i++ {
 		enqueueBlockBatch(i*10+uint64(1), i*10+uint64(10))
 		for seq := i*10 + uint64(1); seq <= i*10+uint64(10); seq++ {
-			assert.Equal(t, seq, bp.PullBlock(seq).Header.Number)
+			require.Equal(t, seq, bp.PullBlock(seq).Header.Number)
 		}
 	}
 
-	assert.Equal(t, 50, gotBlockMessageCount)
+	require.Equal(t, 50, gotBlockMessageCount)
 	bp.Close()
 	dialer.assertAllConnectionsClosed(t)
 }
@@ -471,10 +470,10 @@ func TestBlockPullerClone(t *testing.T) {
 	// and override its channel
 	bpClone.Channel = "foo"
 	// Ensure the channel change doesn't reflect in the original puller
-	assert.Equal(t, "mychannel", bp.Channel)
+	require.Equal(t, "mychannel", bp.Channel)
 
 	block := bp.PullBlock(1)
-	assert.Equal(t, uint64(1), block.Header.Number)
+	require.Equal(t, uint64(1), block.Header.Number)
 
 	// After the original block puller is closed, the
 	// clone should not be affected
@@ -490,7 +489,7 @@ func TestBlockPullerClone(t *testing.T) {
 	osn1.enqueueResponse(2)
 
 	block = bpClone.PullBlock(2)
-	assert.Equal(t, uint64(2), block.Header.Number)
+	require.Equal(t, uint64(2), block.Header.Number)
 
 	bpClone.Close()
 	dialer.assertAllConnectionsClosed(t)
@@ -527,11 +526,11 @@ func TestBlockPullerHeightsByEndpoints(t *testing.T) {
 	osn3.enqueueResponse(5)
 
 	res, err := bp.HeightsByEndpoints()
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	expected := map[string]uint64{
 		osn3.srv.Address(): 6,
 	}
-	assert.Equal(t, expected, res)
+	require.Equal(t, expected, res)
 
 	bp.Close()
 	dialer.assertAllConnectionsClosed(t)
@@ -579,14 +578,14 @@ func TestBlockPullerMultipleOrderers(t *testing.T) {
 	initialTotalBlockAmount := len(osn1.blockResponses) + len(osn2.blockResponses) + len(osn3.blockResponses)
 
 	for i := 3; i <= 5; i++ {
-		assert.Equal(t, uint64(i), bp.PullBlock(uint64(i)).Header.Number)
+		require.Equal(t, uint64(i), bp.PullBlock(uint64(i)).Header.Number)
 	}
 
 	// Assert the cumulative amount of blocks in the OSNs went down by 6:
 	// blocks 3, 4, 5 were pulled - that's 3 blocks.
 	// block 5 was pulled 3 times at the probe phase.
 	finalTotalBlockAmount := len(osn1.blockResponses) + len(osn2.blockResponses) + len(osn3.blockResponses)
-	assert.Equal(t, initialTotalBlockAmount-6, finalTotalBlockAmount)
+	require.Equal(t, initialTotalBlockAmount-6, finalTotalBlockAmount)
 
 	bp.Close()
 	dialer.assertAllConnectionsClosed(t)
@@ -650,9 +649,9 @@ func TestBlockPullerFailover(t *testing.T) {
 	}()
 
 	// Assert reception of blocks 1 to 3
-	assert.Equal(t, uint64(1), bp.PullBlock(uint64(1)).Header.Number)
-	assert.Equal(t, uint64(2), bp.PullBlock(uint64(2)).Header.Number)
-	assert.Equal(t, uint64(3), bp.PullBlock(uint64(3)).Header.Number)
+	require.Equal(t, uint64(1), bp.PullBlock(uint64(1)).Header.Number)
+	require.Equal(t, uint64(2), bp.PullBlock(uint64(2)).Header.Number)
+	require.Equal(t, uint64(3), bp.PullBlock(uint64(3)).Header.Number)
 
 	bp.Close()
 	dialer.assertAllConnectionsClosed(t)
@@ -693,7 +692,7 @@ func TestBlockPullerNoneResponsiveOrderer(t *testing.T) {
 		defer once.Do(waitForConnection.Done)
 		s := entry.Message[len("Sending request for block [1] to 127.0.0.1:"):]
 		port, err := strconv.ParseInt(s, 10, 32)
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		// If osn2 is the current orderer we're connected to,
 		// the orderer we're not connected to, is osn1
 		if osn2.port() == int(port) {
@@ -723,9 +722,9 @@ func TestBlockPullerNoneResponsiveOrderer(t *testing.T) {
 	}()
 
 	// Assert reception of blocks 1 to 3
-	assert.Equal(t, uint64(1), bp.PullBlock(uint64(1)).Header.Number)
-	assert.Equal(t, uint64(2), bp.PullBlock(uint64(2)).Header.Number)
-	assert.Equal(t, uint64(3), bp.PullBlock(uint64(3)).Header.Number)
+	require.Equal(t, uint64(1), bp.PullBlock(uint64(1)).Header.Number)
+	require.Equal(t, uint64(2), bp.PullBlock(uint64(2)).Header.Number)
+	require.Equal(t, uint64(3), bp.PullBlock(uint64(3)).Header.Number)
 
 	bp.Close()
 	dialer.assertAllConnectionsClosed(t)
@@ -765,18 +764,24 @@ func TestBlockPullerNoOrdererAliveAtStartup(t *testing.T) {
 		osn.enqueueResponse(2)
 	}()
 
-	assert.Equal(t, uint64(1), bp.PullBlock(1).Header.Number)
-	assert.Equal(t, uint64(2), bp.PullBlock(2).Header.Number)
+	require.Equal(t, uint64(1), bp.PullBlock(1).Header.Number)
+	require.Equal(t, uint64(2), bp.PullBlock(2).Header.Number)
 
 	bp.Close()
 	dialer.assertAllConnectionsClosed(t)
 }
 
 func TestBlockPullerFailures(t *testing.T) {
+	// This test case is flaky, so let's add some logs for the next time it fails.
+	flogging.ActivateSpec("debug")
+	defer flogging.ActivateSpec("info")
+	testLogger := flogging.MustGetLogger("test.debug")
+
 	// Scenario: Single ordering node is faulty, but later
 	// on it recovers.
 	failureError := errors.New("oops, something went wrong")
 	failStream := func(osn *deliverServer, _ *cluster.BlockPuller) {
+		testLogger.Info("failStream")
 		osn.Lock()
 		osn.err = failureError
 		osn.Unlock()
@@ -784,6 +789,7 @@ func TestBlockPullerFailures(t *testing.T) {
 
 	badSigErr := errors.New("bad signature")
 	malformBlockSignatureAndRecreateOSNBuffer := func(osn *deliverServer, bp *cluster.BlockPuller) {
+		testLogger.Info("FailFunc of: failure at verifying pulled block")
 		bp.VerifyBlockSequence = func(_ []*common.Block, _ string) error {
 			close(osn.blocks())
 			// After failing once, recover and remove the bad signature error.
@@ -808,11 +814,13 @@ func TestBlockPullerFailures(t *testing.T) {
 	recover := func(osn *deliverServer, bp *cluster.BlockPuller) func(entry zapcore.Entry) error {
 		return func(entry zapcore.Entry) error {
 			if osn.isFaulty() && strings.Contains(entry.Message, failureError.Error()) {
+				testLogger.Info("recover osn.err")
 				osn.Lock()
 				osn.err = nil
 				osn.Unlock()
 			}
 			if strings.Contains(entry.Message, "Failed verifying") {
+				testLogger.Info("recover verifier")
 				bp.VerifyBlockSequence = noopBlockVerifierf
 			}
 			return nil
@@ -870,6 +878,7 @@ func TestBlockPullerFailures(t *testing.T) {
 			name:       "failure at verifying pulled block",
 			logTrigger: "Sending request for block [1]",
 			beforeFunc: func(osn *deliverServer, bp *cluster.BlockPuller) {
+				testLogger.Infof("BeforeFunc of: %s", "failure at verifying pulled block")
 				// The first seek request asks for the latest block and succeeds
 				osn.addExpectProbeAssert()
 				osn.enqueueResponse(3)
@@ -887,6 +896,7 @@ func TestBlockPullerFailures(t *testing.T) {
 	} {
 		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
+			testLogger.Infof("Starting test case: %s", testCase.name)
 			osn := newClusterNode(t)
 			defer osn.stop()
 
@@ -906,9 +916,9 @@ func TestBlockPullerFailures(t *testing.T) {
 			osn.enqueueResponse(2)
 			osn.enqueueResponse(3)
 
-			assert.Equal(t, uint64(1), bp.PullBlock(uint64(1)).Header.Number)
-			assert.Equal(t, uint64(2), bp.PullBlock(uint64(2)).Header.Number)
-			assert.Equal(t, uint64(3), bp.PullBlock(uint64(3)).Header.Number)
+			require.Equal(t, uint64(1), bp.PullBlock(uint64(1)).Header.Number)
+			require.Equal(t, uint64(2), bp.PullBlock(uint64(2)).Header.Number)
+			require.Equal(t, uint64(3), bp.PullBlock(uint64(3)).Header.Number)
 
 			bp.Close()
 			dialer.assertAllConnectionsClosed(t)
@@ -1073,7 +1083,7 @@ func TestImpatientStreamFailure(t *testing.T) {
 		return
 	}
 	_, err = stream.Recv()
-	assert.Error(t, err)
+	require.Error(t, err)
 }
 
 func TestBlockPullerMaxRetriesExhausted(t *testing.T) {
@@ -1138,11 +1148,194 @@ func TestBlockPullerMaxRetriesExhausted(t *testing.T) {
 	bp.MaxTotalBufferBytes = 1
 
 	// Assert reception of blocks 1 to 3
-	assert.Equal(t, uint64(1), bp.PullBlock(uint64(1)).Header.Number)
-	assert.Equal(t, uint64(2), bp.PullBlock(uint64(2)).Header.Number)
-	assert.Nil(t, bp.PullBlock(uint64(3)))
+	require.Equal(t, uint64(1), bp.PullBlock(uint64(1)).Header.Number)
+	require.Equal(t, uint64(2), bp.PullBlock(uint64(2)).Header.Number)
+	require.Nil(t, bp.PullBlock(uint64(3)))
 
 	bp.Close()
 	dialer.assertAllConnectionsClosed(t)
-	assert.True(t, exhaustedRetryAttemptsLogged)
+	require.True(t, exhaustedRetryAttemptsLogged)
+}
+
+func TestBlockPullerToBadEndpoint(t *testing.T) {
+	// Scenario: The block puller does not get stuck in an endless loop if it cannot connect to any endpoint.
+	dialer := newCountingDialer()
+	bp := newBlockPuller(dialer, "10.10.10.10:666") // Nobody is there
+
+	var exhaustedRetryAttemptsLogged bool
+	var couldNotConnectLogged bool
+
+	bp.Logger = bp.Logger.WithOptions(zap.Hooks(func(entry zapcore.Entry) error {
+		if entry.Message == "Failed pulling block [1]: retry count exhausted(2)" {
+			exhaustedRetryAttemptsLogged = true
+		}
+		if entry.Message == "Failed to connect to some endpoint, attempts exhausted(2), seq: 1, endpoints: [{\"CAs\":null,\"Endpoint\":\"10.10.10.10:666\"}]" {
+			couldNotConnectLogged = true
+		}
+		return nil
+	}))
+
+	bp.MaxPullBlockRetries = 2
+	// We don't expect to timeout in this test, so make the timeout large
+	// to prevent flakes due to CPU starvation.
+	bp.FetchTimeout = time.Hour
+
+	require.Nil(t, bp.PullBlock(uint64(1)))
+
+	bp.Close()
+	dialer.assertAllConnectionsClosed(t)
+	require.True(t, exhaustedRetryAttemptsLogged)
+	require.True(t, couldNotConnectLogged)
+}
+
+func TestBlockPuller_UpdateEndpoint(t *testing.T) {
+	t.Run("HeightsByEndpoints are changing", func(t *testing.T) {
+		// Scenario: We ask for the latest block from a set of ordering nodes.
+		// We then add an endpoint and remove an endpoint, update the puller's endpoints, and ask again.
+		osn1 := newClusterNode(t)
+		defer osn1.stop()
+		osn2 := newClusterNode(t)
+		defer osn2.stop()
+		osn3 := newClusterNode(t)
+		defer osn3.stop()
+
+		dialer := newCountingDialer()
+		bp := newBlockPuller(dialer, osn1.srv.Address(), osn2.srv.Address(), osn3.srv.Address())
+
+		// The first seek request asks for the latest block from some ordering node
+		osn1.addExpectProbeAssert()
+		osn2.addExpectProbeAssert()
+		osn3.addExpectProbeAssert()
+
+		osn1.enqueueResponse(3)
+		osn2.enqueueResponse(4)
+		osn3.enqueueResponse(5)
+
+		res, err := bp.HeightsByEndpoints()
+		require.NoError(t, err)
+		expected := map[string]uint64{
+			osn1.srv.Address(): 4,
+			osn2.srv.Address(): 5,
+			osn3.srv.Address(): 6,
+		}
+		require.Equal(t, expected, res)
+
+		osn4 := newClusterNode(t)
+		defer osn4.stop()
+
+		bp.UpdateEndpoints(endpointCriteriaFromEndpoints(osn2.srv.Address(), osn3.srv.Address(), osn4.srv.Address()))
+
+		osn2.addExpectProbeAssert()
+		osn3.addExpectProbeAssert()
+		osn4.addExpectProbeAssert()
+
+		osn2.enqueueResponse(44)
+		osn3.enqueueResponse(55)
+		osn4.enqueueResponse(66)
+
+		res, err = bp.HeightsByEndpoints()
+		require.NoError(t, err)
+		expected = map[string]uint64{
+			osn2.srv.Address(): 45,
+			osn3.srv.Address(): 56,
+			osn4.srv.Address(): 67,
+		}
+		require.Equal(t, expected, res)
+
+		bp.Close()
+		dialer.assertAllConnectionsClosed(t)
+	})
+
+	t.Run("switch pulling between endpoints", func(t *testing.T) {
+		// Scenario:
+		// The block puller is expected to pull blocks 1 to 2 from osn1.
+		// After block 2 the endpoints are updated to osn2.
+		// The block puller is expected to pull blocks 3 to 4 from osn2.
+
+		osn1 := newClusterNode(t)
+		defer osn1.stop()
+
+		osn1.enqueueResponse(2)
+		osn1.addExpectProbeAssert()
+		// We send blocks 1 and 2
+		osn1.addExpectPullAssert(1)
+		osn1.enqueueResponse(1)
+		osn1.enqueueResponse(2)
+
+		dialer := newCountingDialer()
+		bp := newBlockPuller(dialer, osn1.srv.Address())
+
+		require.Equal(t, uint64(1), bp.PullBlock(uint64(1)).Header.Number)
+		require.Equal(t, uint64(2), bp.PullBlock(uint64(2)).Header.Number)
+
+		osn2 := newClusterNode(t)
+		defer osn2.stop()
+
+		osn2.enqueueResponse(4)
+		osn2.addExpectProbeAssert()
+		// We send blocks 1 and 2
+		osn2.addExpectPullAssert(3)
+		osn2.enqueueResponse(3)
+		osn2.enqueueResponse(4)
+
+		// This will disconnect
+		bp.UpdateEndpoints(endpointCriteriaFromEndpoints(osn2.srv.Address()))
+
+		require.Equal(t, uint64(3), bp.PullBlock(uint64(3)).Header.Number)
+		require.Equal(t, uint64(4), bp.PullBlock(uint64(4)).Header.Number)
+
+		bp.Close()
+		dialer.assertAllConnectionsClosed(t)
+	})
+	t.Run("update to a bad endpoint", func(t *testing.T) {
+		// Scenario:
+		// The block puller is expected to pull blocks 1 to 3. The target orderer delivers only blocks 1,2.
+		// The puller pulls blocks 1 & 2 into the buffer. After block 1 the endpoints are updated to a bad endpoint.
+		// The puller gets block 2 from the buffer. It should attempt to re-connect until the attempt number is exhausted,
+		// after which it gives up, and nil is returned.
+
+		osn := newClusterNode(t)
+
+		osn.enqueueResponse(2)
+		osn.addExpectProbeAssert()
+		// We send blocks 1 and 2
+		osn.addExpectPullAssert(1)
+		osn.enqueueResponse(1)
+		osn.enqueueResponse(2)
+
+		dialer := newCountingDialer()
+		bp := newBlockPuller(dialer, osn.srv.Address())
+
+		var exhaustedRetryAttemptsLogged bool
+		var couldNotConnectLogged bool
+		bp.Logger = bp.Logger.WithOptions(zap.Hooks(func(entry zapcore.Entry) error {
+			if entry.Message == "Failed pulling block [3]: retry count exhausted(2)" {
+				exhaustedRetryAttemptsLogged = true
+			}
+			if entry.Message ==
+				"Failed to connect to some endpoint, attempts exhausted(2), seq: 3, endpoints: [{\"CAs\":null,\"Endpoint\":\"10.10.10.10:666\"}]" {
+				couldNotConnectLogged = true
+			}
+			return nil
+		}))
+
+		bp.MaxPullBlockRetries = 2
+		// We don't expect to timeout in this test, so make the timeout large
+		// to prevent flakes due to CPU starvation.
+		bp.FetchTimeout = time.Second
+
+		require.Equal(t, uint64(1), bp.PullBlock(uint64(1)).Header.Number)
+		osn.stop()
+		// This will disconnect
+		bp.UpdateEndpoints(endpointCriteriaFromEndpoints("10.10.10.10:666"))
+		// Block 2 from the buffer
+		require.Equal(t, uint64(2), bp.PullBlock(uint64(2)).Header.Number)
+		// Block 3 will never arrive
+		require.Nil(t, bp.PullBlock(uint64(3)))
+
+		bp.Close()
+		dialer.assertAllConnectionsClosed(t)
+		require.True(t, exhaustedRetryAttemptsLogged)
+		require.True(t, couldNotConnectLogged)
+	})
 }

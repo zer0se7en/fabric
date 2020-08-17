@@ -31,7 +31,6 @@ const (
 	nsJoiner       = "$$"
 	pvtDataPrefix  = "p"
 	hashDataPrefix = "h"
-	couchDB        = "CouchDB"
 )
 
 // StateDBConfig encapsulates the configuration for stateDB on the ledger.
@@ -47,14 +46,15 @@ type StateDBConfig struct {
 // DBProvider encapsulates other providers such as VersionedDBProvider and
 // BookeepingProvider which are required to create DB for a channel
 type DBProvider struct {
-	VersionedDBProvider statedb.VersionedDBProvider
-	HealthCheckRegistry ledger.HealthCheckRegistry
-	bookkeepingProvider bookkeeping.Provider
+	VersionedDBProvider      statedb.VersionedDBProvider
+	HealthCheckRegistry      ledger.HealthCheckRegistry
+	bookkeepingProvider      *bookkeeping.Provider
+	versionFromSnapshotValue versionFromSnapshotValueFunc
 }
 
 // NewDBProvider constructs an instance of DBProvider
 func NewDBProvider(
-	bookkeeperProvider bookkeeping.Provider,
+	bookkeeperProvider *bookkeeping.Provider,
 	metricsProvider metrics.Provider,
 	healthCheckRegistry ledger.HealthCheckRegistry,
 	stateDBConf *StateDBConfig,
@@ -62,19 +62,27 @@ func NewDBProvider(
 ) (*DBProvider, error) {
 
 	var vdbProvider statedb.VersionedDBProvider
+	var versionFromSnapshotValue func(snapshotValue []byte) ([]byte, error)
 	var err error
 
-	if stateDBConf != nil && stateDBConf.StateDatabase == couchDB {
+	if stateDBConf != nil && stateDBConf.StateDatabase == ledger.CouchDB {
 		if vdbProvider, err = statecouchdb.NewVersionedDBProvider(stateDBConf.CouchDB, metricsProvider, sysNamespaces); err != nil {
 			return nil, err
 		}
+		versionFromSnapshotValue = statecouchdb.VersionFromSnapshotValue
 	} else {
 		if vdbProvider, err = stateleveldb.NewVersionedDBProvider(stateDBConf.LevelDBPath); err != nil {
 			return nil, err
 		}
+		versionFromSnapshotValue = stateleveldb.VersionFromSnapshotValue
 	}
 
-	dbProvider := &DBProvider{vdbProvider, healthCheckRegistry, bookkeeperProvider}
+	dbProvider := &DBProvider{
+		VersionedDBProvider:      vdbProvider,
+		HealthCheckRegistry:      healthCheckRegistry,
+		bookkeepingProvider:      bookkeeperProvider,
+		versionFromSnapshotValue: versionFromSnapshotValue,
+	}
 
 	err = dbProvider.RegisterHealthChecker()
 	if err != nil {
@@ -111,6 +119,11 @@ func (p *DBProvider) GetDBHandle(id string, chInfoProvider channelInfoProvider) 
 // Close closes all the VersionedDB instances and releases any resources held by VersionedDBProvider
 func (p *DBProvider) Close() {
 	p.VersionedDBProvider.Close()
+}
+
+// Drop drops channel-specific data from the statedb
+func (p *DBProvider) Drop(ledgerid string) error {
+	return p.VersionedDBProvider.Drop(ledgerid)
 }
 
 // DB uses a single database to maintain both the public and private data
@@ -191,7 +204,7 @@ func (s *DB) GetPrivateDataHash(namespace, collection, key string) (*statedb.Ver
 	return s.GetValueHash(namespace, collection, util.ComputeStringHash(key))
 }
 
-// GetPrivateDataHash gets the value hash of a private data item identified by a tuple <namespace, collection, keyHash>
+// GetValueHash gets the value hash of a private data item identified by a tuple <namespace, collection, keyHash>
 func (s *DB) GetValueHash(namespace, collection string, keyHash []byte) (*statedb.VersionedValue, error) {
 	keyHashStr := string(keyHash)
 	if !s.BytesKeySupported() {
@@ -234,7 +247,7 @@ func (s *DB) GetPrivateDataRangeScanIterator(namespace, collection, startKey, en
 	return s.GetStateRangeScanIterator(derivePvtDataNs(namespace, collection), startKey, endKey)
 }
 
-// ExecuteQuery executes the given query and returns an iterator that contains results of type specific to the underlying data store.
+// ExecuteQueryOnPrivateData executes the given query and returns an iterator that contains results of type specific to the underlying data store.
 func (s DB) ExecuteQueryOnPrivateData(namespace, collection, query string) (statedb.ResultsIterator, error) {
 	return s.ExecuteQuery(derivePvtDataNs(namespace, collection), query)
 }
@@ -251,7 +264,9 @@ func (s *DB) ApplyPrivacyAwareUpdates(updates *UpdateBatch, height *version.Heig
 	combinedUpdates := updates.PubUpdates
 	addPvtUpdates(combinedUpdates, updates.PvtUpdates)
 	addHashedUpdates(combinedUpdates, updates.HashUpdates, !s.BytesKeySupported())
-	s.metadataHint.setMetadataUsedFlag(updates)
+	if err := s.metadataHint.setMetadataUsedFlag(updates); err != nil {
+		return err
+	}
 	return s.VersionedDB.ApplyUpdates(combinedUpdates.UpdateBatch, height)
 }
 
@@ -305,13 +320,7 @@ func (s *DB) HandleChaincodeDeploy(chaincodeDefinition *cceventmgmt.ChaincodeDef
 		return nil
 	}
 
-	collectionConfigMap, err := extractCollectionNames(chaincodeDefinition)
-	if err != nil {
-		logger.Errorf("Error while retrieving collection config for chaincode=[%s]: %s",
-			chaincodeDefinition.Name, err)
-		return nil
-	}
-
+	collectionConfigMap := extractCollectionNames(chaincodeDefinition)
 	for directoryPath, indexFiles := range dbArtifacts {
 		indexFilesData := make(map[string][]byte)
 		for _, f := range indexFiles {
@@ -354,6 +363,14 @@ func deriveHashedDataNs(namespace, collection string) string {
 	return namespace + nsJoiner + hashDataPrefix + collection
 }
 
+func decodeHashedDataNsColl(hashedDataNs string) (string, string, error) {
+	strs := strings.Split(hashedDataNs, nsJoiner+hashDataPrefix)
+	if len(strs) != 2 {
+		return "", "", errors.Errorf("not a valid hashedDataNs [%s]", hashedDataNs)
+	}
+	return strs[0], strs[1], nil
+}
+
 func isPvtdataNs(namespace string) bool {
 	return strings.Contains(namespace, nsJoiner+pvtDataPrefix)
 }
@@ -385,7 +402,7 @@ func addHashedUpdates(pubUpdateBatch *PubUpdateBatch, hashedUpdateBatch *HashedU
 	}
 }
 
-func extractCollectionNames(chaincodeDefinition *cceventmgmt.ChaincodeDefinition) (map[string]bool, error) {
+func extractCollectionNames(chaincodeDefinition *cceventmgmt.ChaincodeDefinition) map[string]bool {
 	collectionConfigs := chaincodeDefinition.CollectionConfigs
 	collectionConfigsMap := make(map[string]bool)
 	if collectionConfigs != nil {
@@ -397,7 +414,7 @@ func extractCollectionNames(chaincodeDefinition *cceventmgmt.ChaincodeDefinition
 			collectionConfigsMap[sConfig.Name] = true
 		}
 	}
-	return collectionConfigsMap, nil
+	return collectionConfigsMap
 }
 
 type indexInfo struct {

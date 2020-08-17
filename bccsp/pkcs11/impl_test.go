@@ -31,7 +31,7 @@ import (
 	"github.com/hyperledger/fabric/bccsp/signer"
 	"github.com/hyperledger/fabric/bccsp/sw"
 	"github.com/hyperledger/fabric/bccsp/utils"
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/sha3"
 )
 
@@ -77,10 +77,7 @@ func testMain(m *testing.M) int {
 	}
 
 	if strings.Contains(lib, "softhsm") {
-		tests = append(tests, []testConfig{
-			{256, "SHA2", true, false},
-			{256, "SHA2", true, true},
-		}...)
+		tests = append(tests, testConfig{256, "SHA2", true, true})
 	}
 
 	opts := PKCS11Opts{
@@ -92,9 +89,9 @@ func testMain(m *testing.M) int {
 	for _, config := range tests {
 		currentTestConfig = config
 
-		opts.HashFamily = config.hashFamily
-		opts.SecLevel = config.securityLevel
-		opts.SoftVerify = config.softVerify
+		opts.Hash = config.hashFamily
+		opts.Security = config.securityLevel
+		opts.SoftwareVerify = config.softVerify
 		opts.Immutable = config.immutable
 		fmt.Printf("Immutable = [%v]\n", opts.Immutable)
 		currentBCCSP, err = New(opts, keyStore)
@@ -114,12 +111,12 @@ func testMain(m *testing.M) int {
 
 func TestNew(t *testing.T) {
 	opts := PKCS11Opts{
-		HashFamily: "SHA2",
-		SecLevel:   256,
-		SoftVerify: false,
-		Library:    "lib",
-		Label:      "ForFabric",
-		Pin:        "98765432",
+		Hash:           "SHA2",
+		Security:       256,
+		SoftwareVerify: false,
+		Library:        "lib",
+		Label:          "ForFabric",
+		Pin:            "98765432",
 	}
 
 	// Setup PKCS11 library and provide initial set of values
@@ -128,14 +125,14 @@ func TestNew(t *testing.T) {
 
 	// Test for nil keystore
 	_, err := New(opts, nil)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "Invalid bccsp.KeyStore instance. It must be different from nil")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Invalid bccsp.KeyStore instance. It must be different from nil")
 
 	// Test for invalid PKCS11 loadLib
 	opts.Library = ""
 	_, err = New(opts, currentKS)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "Failed initializing PKCS11 library")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Failed initializing PKCS11 library")
 }
 
 func TestFindPKCS11LibEnvVars(t *testing.T) {
@@ -157,9 +154,9 @@ func TestFindPKCS11LibEnvVars(t *testing.T) {
 		os.Setenv("PKCS11_LABEL", dummy_PKCS11_LABEL)
 
 		lib, pin, label := FindPKCS11Lib()
-		assert.EqualValues(t, dummy_PKCS11_LIB, lib, "FindPKCS11Lib did not return expected library")
-		assert.EqualValues(t, dummy_PKCS11_PIN, pin, "FindPKCS11Lib did not return expected pin")
-		assert.EqualValues(t, dummy_PKCS11_LABEL, label, "FindPKCS11Lib did not return expected label")
+		require.EqualValues(t, dummy_PKCS11_LIB, lib, "FindPKCS11Lib did not return expected library")
+		require.EqualValues(t, dummy_PKCS11_PIN, pin, "FindPKCS11Lib did not return expected pin")
+		require.EqualValues(t, dummy_PKCS11_LABEL, label, "FindPKCS11Lib did not return expected label")
 	})
 
 	t.Run("MissingEnvironment", func(t *testing.T) {
@@ -168,8 +165,8 @@ func TestFindPKCS11LibEnvVars(t *testing.T) {
 		os.Unsetenv("PKCS11_LABEL")
 
 		_, pin, label := FindPKCS11Lib()
-		assert.EqualValues(t, "98765432", pin, "FindPKCS11Lib did not return expected pin")
-		assert.EqualValues(t, "ForFabric", label, "FindPKCS11Lib did not return expected label")
+		require.EqualValues(t, "98765432", pin, "FindPKCS11Lib did not return expected pin")
+		require.EqualValues(t, "ForFabric", label, "FindPKCS11Lib did not return expected label")
 	})
 
 	os.Setenv("PKCS11_LIB", orig_PKCS11_LIB)
@@ -180,14 +177,14 @@ func TestFindPKCS11LibEnvVars(t *testing.T) {
 func TestInvalidNewParameter(t *testing.T) {
 	lib, pin, label := FindPKCS11Lib()
 	opts := PKCS11Opts{
-		Library:    lib,
-		Label:      label,
-		Pin:        pin,
-		SoftVerify: true,
+		Library:        lib,
+		Label:          label,
+		Pin:            pin,
+		SoftwareVerify: true,
 	}
 
-	opts.HashFamily = "SHA2"
-	opts.SecLevel = 0
+	opts.Hash = "SHA2"
+	opts.Security = 0
 	r, err := New(opts, currentKS)
 	if err == nil {
 		t.Fatal("Error should be different from nil in this case")
@@ -196,8 +193,8 @@ func TestInvalidNewParameter(t *testing.T) {
 		t.Fatal("Return value should be equal to nil in this case")
 	}
 
-	opts.HashFamily = "SHA8"
-	opts.SecLevel = 256
+	opts.Hash = "SHA8"
+	opts.Security = 256
 	r, err = New(opts, currentKS)
 	if err == nil {
 		t.Fatal("Error should be different from nil in this case")
@@ -206,8 +203,8 @@ func TestInvalidNewParameter(t *testing.T) {
 		t.Fatal("Return value should be equal to nil in this case")
 	}
 
-	opts.HashFamily = "SHA2"
-	opts.SecLevel = 256
+	opts.Hash = "SHA2"
+	opts.Security = 256
 	r, err = New(opts, nil)
 	if err == nil {
 		t.Fatal("Error should be different from nil in this case")
@@ -216,8 +213,8 @@ func TestInvalidNewParameter(t *testing.T) {
 		t.Fatal("Return value should be equal to nil in this case")
 	}
 
-	opts.HashFamily = "SHA3"
-	opts.SecLevel = 0
+	opts.Hash = "SHA3"
+	opts.Security = 0
 	r, err = New(opts, nil)
 	if err == nil {
 		t.Fatal("Error should be different from nil in this case")
@@ -558,12 +555,12 @@ func TestECDSASign(t *testing.T) {
 	}
 
 	_, err = currentBCCSP.Sign(nil, digest, nil)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "Invalid Key. It must not be nil")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Invalid Key. It must not be nil")
 
 	_, err = currentBCCSP.Sign(k, nil, nil)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "Invalid digest. Cannot be empty")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Invalid digest. Cannot be empty")
 }
 
 func TestECDSAVerify(t *testing.T) {
@@ -606,16 +603,16 @@ func TestECDSAVerify(t *testing.T) {
 	}
 
 	_, err = currentBCCSP.Verify(nil, signature, digest, nil)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "Invalid Key. It must not be nil")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Invalid Key. It must not be nil")
 
 	_, err = currentBCCSP.Verify(pk, nil, digest, nil)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "Invalid signature. Cannot be empty")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Invalid signature. Cannot be empty")
 
 	_, err = currentBCCSP.Verify(pk, signature, nil, nil)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "Invalid digest. Cannot be empty")
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "Invalid digest. Cannot be empty")
 
 	// Import the exported public key
 	pkRaw, err := pk.Bytes()

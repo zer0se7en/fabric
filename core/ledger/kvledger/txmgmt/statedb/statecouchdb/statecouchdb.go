@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"sync"
 
@@ -37,6 +38,10 @@ const (
 	// dataformatVersionDocID is used as a key for maintaining version of the data format (maintained in fabric internal db)
 	dataformatVersionDocID      = "dataformatVersion"
 	fullScanIteratorValueFormat = byte(1)
+)
+
+var (
+	maxDataImportBatchMemorySize = 2 * 1024 * 1024
 )
 
 // VersionedDBProvider implements interface VersionedDBProvider
@@ -147,10 +152,87 @@ func (provider *VersionedDBProvider) GetDBHandle(dbName string, nsProvider state
 	return vdb, nil
 }
 
+// ImportFromSnapshot loads the public state and pvtdata hashes from the snapshot files previously generated
+func (provider *VersionedDBProvider) ImportFromSnapshot(
+	dbName string, savepoint *version.Height, itr statedb.FullScanIterator, dbValueFormat byte) error {
+	metadataDB, err := createCouchDatabase(provider.couchInstance, constructMetadataDBName(dbName))
+	if err != nil {
+		return errors.WithMessagef(err, "error while creating the metadata database for channel %s", dbName)
+	}
+
+	vdb := &VersionedDB{
+		chainName:     dbName,
+		couchInstance: provider.couchInstance,
+		metadataDB:    metadataDB,
+		channelMetadata: &channelMetadata{
+			ChannelName:      dbName,
+			NamespaceDBsInfo: make(map[string]*namespaceDBInfo),
+		},
+		namespaceDBs: make(map[string]*couchDatabase),
+	}
+	if err := vdb.writeChannelMetadata(); err != nil {
+		return errors.WithMessage(err, "error while writing channel metadata")
+	}
+
+	s := &snapshotImporter{
+		vdb:         vdb,
+		itr:         itr,
+		valueFormat: dbValueFormat,
+	}
+	if err := s.importState(); err != nil {
+		return err
+	}
+
+	return vdb.recordSavepoint(savepoint)
+}
+
 // Close closes the underlying db instance
 func (provider *VersionedDBProvider) Close() {
 	// No close needed on Couch
 	provider.redoLoggerProvider.close()
+}
+
+// Drop drops the couch dbs and redologger data for the channel.
+// It is not an error if a database does not exist.
+func (provider *VersionedDBProvider) Drop(dbName string) error {
+	metadataDBName := constructMetadataDBName(dbName)
+	couchDBDatabase := couchDatabase{couchInstance: provider.couchInstance, dbName: metadataDBName, indexWarmCounter: 1}
+	_, couchDBReturn, err := couchDBDatabase.getDatabaseInfo()
+	if couchDBReturn != nil && couchDBReturn.StatusCode == 404 {
+		// db does not exist
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+
+	metadataDB, err := createCouchDatabase(provider.couchInstance, metadataDBName)
+	if err != nil {
+		return err
+	}
+	channelMetadata, err := readChannelMetadata(metadataDB)
+	if err != nil {
+		return err
+	}
+
+	for _, dbInfo := range channelMetadata.NamespaceDBsInfo {
+		// do not drop metadataDB until all other dbs are dropped
+		if dbInfo.DBName == metadataDBName {
+			continue
+		}
+		if err := dropDB(provider.couchInstance, dbInfo.DBName); err != nil {
+			logger.Errorw("Error dropping database", "channel", dbName, "namespace", dbInfo.Namespace, "error", err)
+			return err
+		}
+	}
+	if err := dropDB(provider.couchInstance, metadataDBName); err != nil {
+		logger.Errorw("Error dropping metatdataDB", "channel", dbName, "error", err)
+		return err
+	}
+
+	delete(provider.databases, dbName)
+
+	return provider.redoLoggerProvider.leveldbProvider.Drop(dbName)
 }
 
 // HealthCheck checks to see if the couch instance of the peer is healthy
@@ -808,8 +890,12 @@ func (vdb *VersionedDB) initChannelMetadata(isNewDB bool, namespaceProvider stat
 
 // readChannelMetadata returns channel metadata stored in metadataDB
 func (vdb *VersionedDB) readChannelMetadata() (*channelMetadata, error) {
+	return readChannelMetadata(vdb.metadataDB)
+}
+
+func readChannelMetadata(metadataDB *couchDatabase) (*channelMetadata, error) {
 	var err error
-	couchDoc, _, err := vdb.metadataDB.readDoc(channelMetadataDocID)
+	couchDoc, _, err := metadataDB.readDoc(channelMetadataDocID)
 	if err != nil {
 		logger.Errorf("Failed to read db name mapping data %s", err.Error())
 		return nil, err
@@ -866,18 +952,6 @@ func (vdb *VersionedDB) GetFullScanIterator(skipNamespace func(string) bool) (st
 		channelMetadataDocID: true,
 	}
 	return newDBsScanner(dbsToScan, vdb.couchInstance.internalQueryLimit(), toSkipKeysFromEmptyNs)
-}
-
-// ImportState implements method in VersionedDB interface. The function is expected to be used
-// for importing the state from a previously snapshotted state. The parameter itr provides access to
-// the snapshotted state.
-func (vdb *VersionedDB) ImportState(itr statedb.FullScanIterator, dbValueFormat byte) error {
-	return errors.New("Not yet implemented")
-}
-
-// IsEmpty return true if the statedb does not have any content
-func (vdb *VersionedDB) IsEmpty() (bool, error) {
-	return false, errors.New("Not yet implemented")
 }
 
 // applyAdditionalQueryOptions will add additional fields to the query required for query processing
@@ -964,7 +1038,7 @@ func newQueryScanner(namespace string, db *couchDatabase, query string, internal
 	return scanner, nil
 }
 
-func (scanner *queryScanner) Next() (statedb.QueryResult, error) {
+func (scanner *queryScanner) Next() (*statedb.VersionedKV, error) {
 	doc, err := scanner.next()
 	if err != nil {
 		return nil, err
@@ -1167,4 +1241,89 @@ func (s *dbsScanner) Close() {
 		return
 	}
 	s.resultItr.Close()
+}
+
+type snapshotImporter struct {
+	vdb              *VersionedDB
+	itr              statedb.FullScanIterator
+	valueFormat      byte
+	currentNs        string
+	currentNsDB      *couchDatabase
+	pendingDocsBatch []*couchDoc
+	batchMemorySize  int
+}
+
+func (s *snapshotImporter) importState() error {
+	if s.itr == nil {
+		return nil
+	}
+	if s.valueFormat != fullScanIteratorValueFormat {
+		return fmt.Errorf("value format [%x] not supported. Expected value format [%x]",
+			s.valueFormat, fullScanIteratorValueFormat)
+	}
+
+	for {
+		compositeKey, value, err := s.itr.Next()
+		if err != nil {
+			return err
+		}
+		if compositeKey == nil {
+			break
+		}
+
+		switch {
+		case s.currentNsDB == nil:
+			if err := s.createDBForNamespace(compositeKey.Namespace); err != nil {
+				return err
+			}
+		case s.currentNs != compositeKey.Namespace:
+			if err := s.storePendingDocs(); err != nil {
+				return err
+			}
+			if err := s.createDBForNamespace(compositeKey.Namespace); err != nil {
+				return err
+			}
+		}
+
+		doc, err := snapshotValueToCouchDoc(compositeKey.Key, value)
+		if err != nil {
+			return err
+		}
+		s.pendingDocsBatch = append(s.pendingDocsBatch, doc)
+		s.batchMemorySize += doc.len()
+
+		if s.batchMemorySize >= maxDataImportBatchMemorySize ||
+			len(s.pendingDocsBatch) == s.vdb.couchInstance.maxBatchUpdateSize() {
+			if err := s.storePendingDocs(); err != nil {
+				return err
+			}
+		}
+	}
+
+	return s.storePendingDocs()
+}
+
+func (s *snapshotImporter) createDBForNamespace(ns string) error {
+	s.currentNs = ns
+	var err error
+	s.currentNsDB, err = s.vdb.getNamespaceDBHandle(ns)
+	return errors.WithMessagef(err, "error while creating database for the namespace %s", ns)
+}
+
+func (s *snapshotImporter) storePendingDocs() error {
+	if len(s.pendingDocsBatch) == 0 {
+		return nil
+	}
+
+	if err := s.currentNsDB.insertDocuments(s.pendingDocsBatch); err != nil {
+		return errors.WithMessagef(
+			err,
+			"error while storing %d states associated with namespace %s",
+			len(s.pendingDocsBatch), s.currentNs,
+		)
+	}
+	s.batchMemorySize = 0
+	s.pendingDocsBatch = nil
+
+	return nil
 }

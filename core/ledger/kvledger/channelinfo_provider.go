@@ -45,9 +45,7 @@ func (p *channelInfoProvider) NamespacesAndCollections(vdb statedb.VersionedDB) 
 	for _, ccInfo := range chaincodesInfo {
 		ccName := ccInfo.Name
 		retNamespaces[ccName] = []string{}
-		for _, implicitCollName := range implicitCollNames {
-			retNamespaces[ccName] = append(retNamespaces[ccName], implicitCollName)
-		}
+		retNamespaces[ccName] = append(retNamespaces[ccName], implicitCollNames...)
 		if ccInfo.ExplicitCollectionConfigPkg == nil {
 			continue
 		}
@@ -65,9 +63,7 @@ func (p *channelInfoProvider) NamespacesAndCollections(vdb statedb.VersionedDB) 
 		if ns == "lscc" {
 			continue
 		}
-		for _, implicitCollName := range implicitCollNames {
-			retNamespaces[ns] = append(retNamespaces[ns], implicitCollName)
-		}
+		retNamespaces[ns] = append(retNamespaces[ns], implicitCollNames...)
 	}
 
 	// add namespace ""
@@ -169,15 +165,13 @@ type resultsItr struct {
 
 // Next implements method in interface ledger.ResultsIterator
 func (itr *resultsItr) Next() (commonledger.QueryResult, error) {
-	queryResult, err := itr.dbItr.Next()
+	versionedKV, err := itr.dbItr.Next()
 	if err != nil {
 		return nil, err
 	}
-	// itr.updateRangeQueryInfo(queryResult)
-	if queryResult == nil {
+	if versionedKV == nil {
 		return nil, nil
 	}
-	versionedKV := queryResult.(*statedb.VersionedKV)
 	return &queryresult.KV{Namespace: versionedKV.Namespace, Key: versionedKV.Key, Value: versionedKV.Value}, nil
 }
 

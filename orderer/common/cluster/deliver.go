@@ -67,6 +67,11 @@ func (p *BlockPuller) Clone() *BlockPuller {
 // Close makes the BlockPuller close the connection and stream
 // with the remote endpoint, and wipe the internal block buffer.
 func (p *BlockPuller) Close() {
+	p.disconnect()
+	p.blockBuff = nil
+}
+
+func (p *BlockPuller) disconnect() {
 	if p.cancelStream != nil {
 		p.cancelStream()
 	}
@@ -78,7 +83,6 @@ func (p *BlockPuller) Close() {
 	p.conn = nil
 	p.endpoint = ""
 	p.latestSeq = 0
-	p.blockBuff = nil
 }
 
 // PullBlock blocks until a block with the given sequence is fetched
@@ -112,20 +116,37 @@ func (p *BlockPuller) HeightsByEndpoints() (map[string]uint64, error) {
 	return res, endpointsInfo.err
 }
 
+// UpdateEndpoints assigns the new endpoints and disconnects from the current one.
+func (p *BlockPuller) UpdateEndpoints(endpoints []EndpointCriteria) {
+	p.Logger.Debugf("Updating endpoints: %v", endpoints)
+	p.Endpoints = endpoints
+	//TODO FAB-18121 Disconnect only if the currently connected endpoint was dropped or has changes in its TLSRootCAs
+	p.disconnect()
+}
+
 func (p *BlockPuller) tryFetchBlock(seq uint64) *common.Block {
-	var reConnected bool
-	for p.isDisconnected() {
-		reConnected = true
-		p.connectToSomeEndpoint(seq)
-		if p.isDisconnected() {
-			time.Sleep(p.RetryTimeout)
-		}
-	}
 
 	block := p.popBlock(seq)
 	if block != nil {
 		return block
 	}
+
+	var reConnected bool
+
+	for retriesLeft := p.MaxPullBlockRetries; p.isDisconnected(); retriesLeft-- {
+		reConnected = true
+		p.connectToSomeEndpoint(seq)
+		if p.isDisconnected() {
+			p.Logger.Debugf("Failed to connect to some endpoint, going to try again in %v", p.RetryTimeout)
+			time.Sleep(p.RetryTimeout)
+		}
+		if retriesLeft == 0 && p.MaxPullBlockRetries > 0 {
+			p.Logger.Errorf("Failed to connect to some endpoint, attempts exhausted(%d), seq: %d, endpoints: %v",
+				p.MaxPullBlockRetries, seq, p.Endpoints)
+			return nil
+		}
+	}
+
 	// Else, buffer is empty. So we need to pull blocks
 	// to re-fill it.
 	if err := p.pullBlocks(seq, reConnected); err != nil {
@@ -281,7 +302,8 @@ func (p *BlockPuller) probeEndpoints(minRequestedSequence uint64) *endpointInfoB
 			defer wg.Done()
 			ei, err := p.probeEndpoint(endpoint, minRequestedSequence)
 			if err != nil {
-				p.Logger.Warningf("Received error of type '%v' from %s", err, endpoint)
+				p.Logger.Warningf("Received error of type '%v' from %s", err, endpoint.Endpoint)
+				p.Logger.Debugf("%s's TLSRootCAs are %s", endpoint.Endpoint, endpoint.TLSRootCAs)
 				if err == ErrForbidden {
 					atomic.StoreUint32(&forbiddenErr, 1)
 				}

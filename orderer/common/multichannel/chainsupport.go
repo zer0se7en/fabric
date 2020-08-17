@@ -9,9 +9,7 @@ package multichannel
 import (
 	cb "github.com/hyperledger/fabric-protos-go/common"
 	"github.com/hyperledger/fabric/bccsp"
-	"github.com/hyperledger/fabric/common/channelconfig"
 	"github.com/hyperledger/fabric/common/ledger/blockledger"
-	"github.com/hyperledger/fabric/common/policies"
 	"github.com/hyperledger/fabric/internal/pkg/identity"
 	"github.com/hyperledger/fabric/orderer/common/blockcutter"
 	"github.com/hyperledger/fabric/orderer/common/msgprocessor"
@@ -104,78 +102,6 @@ func newChainSupport(
 	return cs, nil
 }
 
-func newChainSupportForJoin(
-	joinBlock *cb.Block,
-	registrar *Registrar,
-	ledgerResources *ledgerResources,
-	consenters map[string]consensus.Consenter,
-	signer identity.SignerSerializer,
-	blockcutterMetrics *blockcutter.Metrics,
-	bccsp bccsp.BCCSP,
-) (*ChainSupport, error) {
-
-	if joinBlock.Header.Number == 0 {
-		err := ledgerResources.Append(joinBlock)
-		if err != nil {
-			return nil, errors.Wrap(err, "error appending join block to the ledger")
-		}
-		return newChainSupport(registrar, ledgerResources, consenters, signer, blockcutterMetrics, bccsp)
-	}
-
-	// Construct limited support needed as a parameter for additional support
-	cs := &ChainSupport{
-		ledgerResources:  ledgerResources,
-		SignerSerializer: signer,
-		cutter: blockcutter.NewReceiverImpl(
-			ledgerResources.ConfigtxValidator().ChannelID(),
-			ledgerResources,
-			blockcutterMetrics,
-		),
-		BCCSP: bccsp,
-	}
-
-	// Set up the msgprocessor
-	cs.Processor = msgprocessor.NewStandardChannel(cs, msgprocessor.CreateStandardChannelFilters(cs, registrar.config), bccsp)
-	// No BlockWriter, this will be created when the chain gets converted from follower.Chain to etcdraft.Chain
-	cs.BlockWriter = nil //TODO change embedding of BlockWriter struct to interface, and put here a NoOp implementation or one that panics if used
-
-	// Get the consenter
-	consenterType := ledgerResources.SharedConfig().ConsensusType()
-	consenter, ok := consenters[consenterType]
-	if !ok {
-		return nil, errors.Errorf("error retrieving consenter of type: %s", consenterType)
-	}
-
-	var err error
-	cs.Chain, err = consenter.JoinChain(cs, joinBlock)
-	if err != nil {
-		return nil, err
-	}
-
-	cs.MetadataValidator, ok = cs.Chain.(consensus.MetadataValidator)
-	if !ok {
-		cs.MetadataValidator = consensus.NoOpMetadataValidator{}
-	}
-
-	cs.StatusReporter, ok = cs.Chain.(consensus.StatusReporter)
-	if !ok { // Non-cluster types: solo, kafka
-		cs.StatusReporter = consensus.StaticStatusReporter{ClusterRelation: types.ClusterRelationNone, Status: types.StatusActive}
-	}
-
-	logger.Debugf("[channel: %s] Done creating channel support resources for join", cs.ChannelID())
-
-	return cs, nil
-}
-
-// Block returns a block with the following number,
-// or nil if such a block doesn't exist.
-func (cs *ChainSupport) Block(number uint64) *cb.Block {
-	if cs.Height() <= number {
-		return nil
-	}
-	return blockledger.GetBlock(cs.Reader(), number)
-}
-
 func (cs *ChainSupport) Reader() blockledger.Reader {
 	return cs
 }
@@ -239,11 +165,6 @@ func (cs *ChainSupport) ProposeConfigUpdate(configtx *cb.Envelope) (*cb.ConfigEn
 	return env, nil
 }
 
-// ChannelID passes through to the underlying configtx.Validator
-func (cs *ChainSupport) ChannelID() string {
-	return cs.ConfigtxValidator().ChannelID()
-}
-
 // ConfigProto passes through to the underlying configtx.Validator
 func (cs *ChainSupport) ConfigProto() *cb.Config {
 	return cs.ConfigtxValidator().ConfigProto()
@@ -258,31 +179,4 @@ func (cs *ChainSupport) Sequence() uint64 {
 // unlike WriteBlock that also mutates its metadata.
 func (cs *ChainSupport) Append(block *cb.Block) error {
 	return cs.ledgerResources.ReadWriter.Append(block)
-}
-
-// VerifyBlockSignature verifies a signature of a block.
-// It has an optional argument of a configuration envelope
-// which would make the block verification to use validation rules
-// based on the given configuration in the ConfigEnvelope.
-// If the config envelope passed is nil, then the validation rules used
-// are the ones that were applied at commit of previous blocks.
-func (cs *ChainSupport) VerifyBlockSignature(sd []*protoutil.SignedData, envelope *cb.ConfigEnvelope) error {
-	policyMgr := cs.PolicyManager()
-	// If the envelope passed isn't nil, we should use a different policy manager.
-	if envelope != nil {
-		bundle, err := channelconfig.NewBundle(cs.ChannelID(), envelope.Config, cs.BCCSP)
-		if err != nil {
-			return err
-		}
-		policyMgr = bundle.PolicyManager()
-	}
-	policy, exists := policyMgr.GetPolicy(policies.BlockValidation)
-	if !exists {
-		return errors.Errorf("policy %s wasn't found", policies.BlockValidation)
-	}
-	err := policy.EvaluateSignedData(sd)
-	if err != nil {
-		return errors.Wrap(err, "block verification failed")
-	}
-	return nil
 }

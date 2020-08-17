@@ -16,7 +16,6 @@ import (
 	"github.com/hyperledger/fabric/common/ledger/testutil"
 	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/rwsetutil"
-	"github.com/hyperledger/fabric/core/ledger/mock"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/stretchr/testify/require"
 )
@@ -24,12 +23,43 @@ import (
 func TestConstructValidInvalidBlocksPvtData(t *testing.T) {
 	conf, cleanup := testConfig(t)
 	defer cleanup()
-	provider := testutilNewProvider(conf, t, &mock.DeployedChaincodeInfoProvider{})
+	nsCollBtlConfs := []*nsCollBtlConfig{
+		{
+			namespace: "ns-1",
+			btlConfig: map[string]uint64{
+				"coll-1": 0,
+				"coll-2": 0,
+			},
+		},
+		{
+			namespace: "ns-2",
+			btlConfig: map[string]uint64{
+				"coll-2": 0,
+			},
+		},
+		{
+			namespace: "ns-4",
+			btlConfig: map[string]uint64{
+				"coll-2": 0,
+			},
+		},
+		{
+			namespace: "ns-6",
+			btlConfig: map[string]uint64{
+				"coll-2": 0,
+			},
+		},
+	}
+	provider := testutilNewProviderWithCollectionConfig(
+		t,
+		nsCollBtlConfs,
+		conf,
+	)
 	defer provider.Close()
 
 	_, gb := testutil.NewBlockGenerator(t, "testLedger", false)
 	gbHash := protoutil.BlockHeaderHash(gb.Header)
-	lg, _ := provider.Create(gb)
+	lg, _ := provider.CreateFromGenesisBlock(gb)
 	defer lg.Close()
 
 	// construct pvtData and pubRwSet (i.e., hashed rw set)
@@ -72,7 +102,7 @@ func TestConstructValidInvalidBlocksPvtData(t *testing.T) {
 	}
 
 	// construct a missingData list for block1
-	missingData := make(ledger.TxMissingPvtDataMap)
+	missingData := make(ledger.TxMissingPvtData)
 	missingData.Add(3, "ns-1", "coll-1", true)
 	missingData.Add(3, "ns-1", "coll-2", true)
 	missingData.Add(6, "ns-6", "coll-2", true)

@@ -16,7 +16,7 @@ import (
 )
 
 func prepareStoreEntries(blockNum uint64, pvtData []*ledger.TxPvtData, btlPolicy pvtdatapolicy.BTLPolicy,
-	missingPvtData ledger.TxMissingPvtDataMap) (*storeEntries, error) {
+	missingPvtData ledger.TxMissingPvtData) (*storeEntries, error) {
 	dataEntries := prepareDataEntries(blockNum, pvtData)
 
 	missingDataEntries := prepareMissingDataEntries(blockNum, missingPvtData)
@@ -48,7 +48,7 @@ func prepareDataEntries(blockNum uint64, pvtData []*ledger.TxPvtData) []*dataEnt
 	return dataEntries
 }
 
-func prepareMissingDataEntries(committingBlk uint64, missingPvtData ledger.TxMissingPvtDataMap) map[missingDataKey]*bitset.BitSet {
+func prepareMissingDataEntries(committingBlk uint64, missingPvtData ledger.TxMissingPvtData) map[missingDataKey]*bitset.BitSet {
 	missingDataEntries := make(map[missingDataKey]*bitset.BitSet)
 
 	for txNum, missingData := range missingPvtData {
@@ -72,18 +72,21 @@ func prepareMissingDataEntries(committingBlk uint64, missingPvtData ledger.TxMis
 // and missing private.
 func prepareExpiryEntries(committingBlk uint64, dataEntries []*dataEntry, missingDataEntries map[missingDataKey]*bitset.BitSet,
 	btlPolicy pvtdatapolicy.BTLPolicy) ([]*expiryEntry, error) {
-
 	var expiryEntries []*expiryEntry
 	mapByExpiringBlk := make(map[uint64]*ExpiryData)
 
 	// 1. prepare expiryData for non-missing data
 	for _, dataEntry := range dataEntries {
-		prepareExpiryEntriesForPresentData(mapByExpiringBlk, dataEntry.key, btlPolicy)
+		if err := prepareExpiryEntriesForPresentData(mapByExpiringBlk, dataEntry.key, btlPolicy); err != nil {
+			return nil, err
+		}
 	}
 
 	// 2. prepare expiryData for missing data
 	for missingDataKey := range missingDataEntries {
-		prepareExpiryEntriesForMissingData(mapByExpiringBlk, &missingDataKey, btlPolicy)
+		if err := prepareExpiryEntriesForMissingData(mapByExpiringBlk, &missingDataKey, btlPolicy); err != nil {
+			return nil, err
+		}
 	}
 
 	for expiryBlk, expiryData := range mapByExpiringBlk {
@@ -152,7 +155,6 @@ func deriveKeys(expiryEntry *expiryEntry) (dataKeys []*dataKey, missingDataKeys 
 				&missingDataKey{nsCollBlk{ns, coll, expiryEntry.key.committingBlk}, true})
 			missingDataKeys = append(missingDataKeys,
 				&missingDataKey{nsCollBlk{ns, coll, expiryEntry.key.committingBlk}, false})
-
 		}
 	}
 	return

@@ -28,6 +28,7 @@ type TestEnv interface {
 	StartExternalResource()
 	Init(t testing.TB)
 	GetDBHandle(id string) *DB
+	GetProvider() *DBProvider
 	GetName() string
 	DBValueFormat() byte
 	DecodeDBValue(dbVal []byte) statedb.VersionedValue
@@ -87,6 +88,11 @@ func (env *LevelDBTestEnv) GetDBHandle(id string) *DB {
 	db, err := env.provider.GetDBHandle(id, nil)
 	require.NoError(env.t, err)
 	return db
+}
+
+// GetProvider returns DBProvider
+func (env *LevelDBTestEnv) GetProvider() *DBProvider {
+	return env.provider
 }
 
 // GetName implements corresponding function from interface TestEnv
@@ -153,7 +159,7 @@ func (env *CouchDBTestEnv) Init(t testing.TB) {
 
 	stateDBConfig := &StateDBConfig{
 		StateDBConfig: &ledger.StateDBConfig{
-			StateDatabase: "CouchDB",
+			StateDatabase: ledger.CouchDB,
 			CouchDB: &ledger.CouchDBConfig{
 				Address:             env.couchAddress,
 				Username:            "admin",
@@ -188,6 +194,11 @@ func (env *CouchDBTestEnv) GetDBHandle(id string) *DB {
 	db, err := env.provider.GetDBHandle(id, &testmock.ChannelInfoProvider{})
 	require.NoError(env.t, err)
 	return db
+}
+
+// GetProvider returns DBProvider
+func (env *CouchDBTestEnv) GetProvider() *DBProvider {
+	return env.provider
 }
 
 // GetName implements corresponding function from interface TestEnv

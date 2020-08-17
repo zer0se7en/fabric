@@ -63,6 +63,7 @@ func (env *testVDBEnv) init(t *testing.T, sysNamespaces []string) {
 		UserCacheSizeMBs:    8,
 	}
 
+	disableKeepAlive = true
 	dbProvider, err := NewVersionedDBProvider(config, &disabled.Provider{}, sysNamespaces)
 	if err != nil {
 		t.Fatalf("Error creating CouchDB Provider: %s", err)
@@ -90,7 +91,7 @@ func (env *testVDBEnv) cleanup() {
 		env.DBProvider.Close()
 	}
 	env.couchDBEnv.cleanup(env.config)
-	os.RemoveAll(env.config.RedoLogPath)
+	require.NoError(env.t, os.RemoveAll(env.config.RedoLogPath))
 }
 
 // testVDBEnv provides a couch db for testing
@@ -192,7 +193,7 @@ func TestGetStateFromCache(t *testing.T) {
 	vv2 := &statedb.VersionedValue{Value: []byte("value2"), Metadata: []byte("meta2"), Version: version.NewHeight(1, 2)}
 	batch.PutValAndMetadata("lscc", "key1", vv2.Value, vv2.Metadata, vv2.Version)
 	savePoint := version.NewHeight(1, 2)
-	db.ApplyUpdates(batch, savePoint)
+	require.NoError(t, db.ApplyUpdates(batch, savePoint))
 	// Note that the ApplyUpdates() updates only the existing entry in the cache. Currently, the
 	// cache has only ns, key1 but we are storing lscc, key1. Hence, no changes would happen in the cache.
 	testDoesNotExistInCache(t, vdbEnv.cache, chainID, "lscc", "key1")
@@ -255,7 +256,7 @@ func TestGetVersionFromCache(t *testing.T) {
 	vv2 := &statedb.VersionedValue{Value: []byte("value2"), Metadata: []byte("meta2"), Version: version.NewHeight(1, 2)}
 	batch.PutValAndMetadata("lscc", "key1", vv2.Value, vv2.Metadata, vv2.Version)
 	savePoint := version.NewHeight(1, 2)
-	db.ApplyUpdates(batch, savePoint)
+	require.NoError(t, db.ApplyUpdates(batch, savePoint))
 	// Note that the ApplyUpdates() updates only the existing entry in the cache. Currently, the
 	// cache has only ns, key1 but we are storing lscc, key1. Hence, no changes would happen in the cache.
 	testDoesNotExistInCache(t, vdbEnv.cache, chainID, "lscc", "key1")
@@ -310,7 +311,7 @@ func TestGetMultipleStatesFromCache(t *testing.T) {
 	vv4 := &statedb.VersionedValue{Value: []byte("value4"), Metadata: []byte("meta4"), Version: version.NewHeight(1, 1)}
 	batch.PutValAndMetadata("ns", "key4", vv4.Value, vv4.Metadata, vv4.Version)
 	savePoint := version.NewHeight(1, 2)
-	db.ApplyUpdates(batch, savePoint)
+	require.NoError(t, db.ApplyUpdates(batch, savePoint))
 
 	testDoesNotExistInCache(t, vdbEnv.cache, chainID, "ns", "key3")
 	testDoesNotExistInCache(t, vdbEnv.cache, chainID, "ns", "key4")
@@ -359,7 +360,7 @@ func TestCacheUpdatesAfterCommit(t *testing.T) {
 	batch.PutValAndMetadata("ns2", "key1", vv3.Value, vv3.Metadata, vv3.Version)
 	batch.PutValAndMetadata("ns2", "key2", vv4.Value, vv4.Metadata, vv4.Version)
 	savePoint := version.NewHeight(1, 5)
-	db.ApplyUpdates(batch, savePoint)
+	require.NoError(t, db.ApplyUpdates(batch, savePoint))
 
 	// key1, key2 in ns1 and ns2 would not be in cache
 	testDoesNotExistInCache(t, vdbEnv.cache, chainID, "ns1", "key1")
@@ -400,7 +401,7 @@ func TestCacheUpdatesAfterCommit(t *testing.T) {
 	batch.Delete("ns2", "key2", vv4Update.Version)
 	batch.PutValAndMetadata("ns2", "key3", vv5.Value, vv5.Metadata, vv5.Version)
 	savePoint = version.NewHeight(2, 5)
-	db.ApplyUpdates(batch, savePoint)
+	require.NoError(t, db.ApplyUpdates(batch, savePoint))
 
 	// cache should have only the update key1 and key2 in ns1
 	cacheValue, err := vdbEnv.cache.getState(chainID, "ns1", "key1")
@@ -560,7 +561,7 @@ func TestInvalidJSONFields(t *testing.T) {
 	db, err := vdbEnv.DBProvider.GetDBHandle("testinvalidfields", nil)
 	require.NoError(t, err)
 
-	db.Open()
+	require.NoError(t, db.Open())
 	defer db.Close()
 
 	batch := statedb.NewUpdateBatch()
@@ -615,7 +616,7 @@ func TestHandleChaincodeDeploy(t *testing.T) {
 
 	db, err := vdbEnv.DBProvider.GetDBHandle("testinit", nil)
 	require.NoError(t, err)
-	db.Open()
+	require.NoError(t, db.Open())
 	defer db.Close()
 	batch := statedb.NewUpdateBatch()
 
@@ -655,7 +656,7 @@ func TestHandleChaincodeDeploy(t *testing.T) {
 	batch.Put("ns2", "key10", []byte(jsonValue10), version.NewHeight(1, 21))
 
 	savePoint := version.NewHeight(2, 22)
-	db.ApplyUpdates(batch, savePoint)
+	require.NoError(t, db.ApplyUpdates(batch, savePoint))
 
 	indexData := map[string][]byte{
 		"META-INF/statedb/couchdb/indexes/indexColorSortName.json":                                               []byte(`{"index":{"fields":[{"color":"desc"}]},"ddoc":"indexColorSortName","name":"indexColorSortName","type":"json"}`),
@@ -713,7 +714,7 @@ func TestIndexDeploymentWithOrderAndBadSyntax(t *testing.T) {
 	defer vdbEnv.cleanup()
 	db, err := vdbEnv.DBProvider.GetDBHandle(channelName, nil)
 	require.NoError(t, err)
-	db.Open()
+	require.NoError(t, db.Open())
 	defer db.Close()
 
 	batch := statedb.NewUpdateBatch()
@@ -789,7 +790,7 @@ func TestPaginatedQuery(t *testing.T) {
 
 	db, err := vdbEnv.DBProvider.GetDBHandle("testpaginatedquery", nil)
 	require.NoError(t, err)
-	db.Open()
+	require.NoError(t, db.Open())
 	defer db.Close()
 
 	batch := statedb.NewUpdateBatch()
@@ -878,7 +879,7 @@ func TestPaginatedQuery(t *testing.T) {
 	batch.Put("ns1", "key40", []byte(jsonValue40), version.NewHeight(1, 4))
 
 	savePoint := version.NewHeight(2, 22)
-	db.ApplyUpdates(batch, savePoint)
+	require.NoError(t, db.ApplyUpdates(batch, savePoint))
 
 	indexData := map[string][]byte{
 		"META-INF/statedb/couchdb/indexes/indexSizeSortName.json": []byte(`{"index":{"fields":[{"size":"desc"}]},"ddoc":"indexSizeSortName","name":"indexSizeSortName","type":"json"}`),
@@ -895,7 +896,7 @@ func TestPaginatedQuery(t *testing.T) {
 		t.Fatalf("Couchdb state impl is expected to implement interface `statedb.IndexCapable`")
 	}
 
-	indexCapable.ProcessIndexesForChaincodeDeploy("ns1", indexData)
+	require.NoError(t, indexCapable.ProcessIndexesForChaincodeDeploy("ns1", indexData))
 	// Sleep to allow time for index creation
 	time.Sleep(100 * time.Millisecond)
 	// Create a query with a sort
@@ -991,7 +992,7 @@ func TestRangeScanWithCouchInternalDocsPresent(t *testing.T) {
 	require.NoError(t, err)
 	couchDatabse, err := db.(*VersionedDB).getNamespaceDBHandle("ns")
 	require.NoError(t, err)
-	db.Open()
+	require.NoError(t, db.Open())
 	defer db.Close()
 	_, err = couchDatabse.createIndex(`{
 		"index" : {"fields" : ["asset_name"]},
@@ -1017,7 +1018,7 @@ func TestRangeScanWithCouchInternalDocsPresent(t *testing.T) {
 		batch.Put("ns", keySmallerThanDesignDoc, []byte(jsonValue), version.NewHeight(1, uint64(i)))
 		batch.Put("ns", keyGreaterThanDesignDoc, []byte(jsonValue), version.NewHeight(1, uint64(i)))
 	}
-	db.ApplyUpdates(batch, version.NewHeight(2, 2))
+	require.NoError(t, db.ApplyUpdates(batch, version.NewHeight(2, 2)))
 	require.NoError(t, err)
 
 	// The Keys in db are in this order
@@ -1037,7 +1038,7 @@ func TestRangeScanWithCouchInternalDocsPresent(t *testing.T) {
 	require.NoError(t, err)
 	assertQueryResults(t, s.resultsInfo.results, []string{"Key-1", "Key-2"})
 	require.Equal(t, "Key-3", s.queryDefinition.startKey)
-	s.getNextStateRangeScanResults()
+	require.NoError(t, s.getNextStateRangeScanResults())
 	assertQueryResults(t, s.resultsInfo.results, []string{"Key-3", "key-1"})
 	require.Equal(t, "key-2", s.queryDefinition.startKey)
 
@@ -1141,9 +1142,8 @@ func testFormatCheck(t *testing.T, dataFormat string, dataExists bool, expectedE
 		require.NoError(t, db.ApplyUpdates(batch, version.NewHeight(1, 1)))
 	}
 	if dataFormat == "" {
-		response, err := dropDB(dbProvider.couchInstance, fabricInternalDBName)
+		err := dropDB(dbProvider.couchInstance, fabricInternalDBName)
 		require.NoError(t, err)
-		require.True(t, response.Ok)
 	} else {
 		require.NoError(t, writeDataFormatVersion(dbProvider.couchInstance, dataFormat))
 	}
@@ -1231,7 +1231,7 @@ func TestLoadCommittedVersion(t *testing.T) {
 	vv := &statedb.VersionedValue{Value: []byte("value4"), Metadata: []byte("meta4"), Version: version.NewHeight(1, 4)}
 	batch.PutValAndMetadata("ns2", "key2", vv.Value, vv.Metadata, vv.Version)
 	savePoint := version.NewHeight(2, 2)
-	db.ApplyUpdates(batch, savePoint)
+	require.NoError(t, db.ApplyUpdates(batch, savePoint))
 
 	// version cache should be empty
 	ver, ok := db.(*VersionedDB).GetCachedVersion("ns1", "key1")
@@ -1298,7 +1298,7 @@ func TestMissingRevisionRetrievalFromDB(t *testing.T) {
 	batch.Put("ns1", "key2", vv2.Value, vv2.Version)
 	batch.Put("ns1", "key3", vv3.Value, vv3.Version)
 	savePoint := version.NewHeight(2, 5)
-	db.ApplyUpdates(batch, savePoint)
+	require.NoError(t, db.ApplyUpdates(batch, savePoint))
 
 	// retrieve the versions of key1, key2, and key3
 	revisions := make(map[string]string)
@@ -1312,7 +1312,7 @@ func TestMissingRevisionRetrievalFromDB(t *testing.T) {
 	batch.Put("ns1", "key1", vv4.Value, vv4.Version)
 	batch.Put("ns1", "key2", vv5.Value, vv5.Version)
 	savePoint = version.NewHeight(3, 5)
-	db.ApplyUpdates(batch, savePoint)
+	require.NoError(t, db.ApplyUpdates(batch, savePoint))
 
 	// for key3, the revision should be the same but not for key1 and key2
 	newRevisions := make(map[string]string)
@@ -1597,7 +1597,7 @@ func TestRangeQueryWithInternalLimitAndPageSize(t *testing.T) {
 	for _, d := range sampleData {
 		batch.PutValAndMetadata(d.Namespace, d.Key, d.Value, d.Metadata, d.Version)
 	}
-	db.ApplyUpdates(batch, version.NewHeight(1, 1))
+	require.NoError(t, db.ApplyUpdates(batch, version.NewHeight(1, 1)))
 
 	defaultLimit := vdbEnv.config.InternalQueryLimit
 
@@ -1658,8 +1658,7 @@ func testRangeQueryWithInternalLimit(
 			itr.Close()
 			break
 		}
-		kv := result.(*statedb.VersionedKV)
-		results = append(results, kv)
+		results = append(results, result)
 	}
 	require.Equal(t, expectedResults, results)
 }
@@ -1679,8 +1678,7 @@ func testRangeQueryWithPageSize(
 		result, err := itr.Next()
 		require.NoError(t, err)
 		if result != nil {
-			kv := result.(*statedb.VersionedKV)
-			results = append(results, kv)
+			results = append(results, result)
 			continue
 		}
 		nextStartKey := itr.GetBookmarkAndClose()
@@ -1695,14 +1693,209 @@ func testRangeQueryWithPageSize(
 }
 
 func TestDataExportImport(t *testing.T) {
-	t.Skip("Skip this test until the import state function is implemented in statecouchdb")
+	t.Run("export-import", func(t *testing.T) {
+		vdbEnv.init(t, nil)
+		defer vdbEnv.cleanup()
+
+		for _, size := range []int{10, 2 * 1024 * 1024} {
+			maxDataImportBatchMemorySize = size
+			commontests.TestDataExportImport(t, vdbEnv.DBProvider, fullScanIteratorValueFormat)
+		}
+	})
+
+	t.Run("nil-iterator", func(t *testing.T) {
+		vdbEnv.init(t, nil)
+		defer vdbEnv.cleanup()
+
+		require.NoError(
+			t,
+			vdbEnv.DBProvider.ImportFromSnapshot("testdb", nil, nil, fullScanIteratorValueFormat),
+		)
+	})
+
+	t.Run("error-couchdb-connection", func(t *testing.T) {
+		vdbEnv.init(t, nil)
+		configBackup := *vdbEnv.config
+		defer func() {
+			vdbEnv.config = &configBackup
+			vdbEnv.cleanup()
+		}()
+
+		vdbEnv.config.MaxRetries = 1
+		vdbEnv.config.MaxRetriesOnStartup = 1
+		vdbEnv.config.RequestTimeout = 1 * time.Second
+		vdbEnv.config.Address = "127.0.0.1:1"
+		require.Contains(
+			t,
+			vdbEnv.DBProvider.ImportFromSnapshot("testdb", nil, nil, byte(0)).Error(),
+			"error while creating the metadata database for channel testdb: http error calling couchdb",
+		)
+	})
+
+	t.Run("error-wrong-format", func(t *testing.T) {
+		vdbEnv.init(t, nil)
+		defer vdbEnv.cleanup()
+
+		require.EqualError(
+			t,
+			vdbEnv.DBProvider.ImportFromSnapshot("testdb", nil, &dummyFullScanIter{}, byte(2)),
+			"value format [2] not supported. Expected value format [1]",
+		)
+	})
+
+	t.Run("error-reading-from-iter", func(t *testing.T) {
+		vdbEnv.init(t, nil)
+		defer vdbEnv.cleanup()
+
+		itr := &dummyFullScanIter{
+			err: errors.New("error while reading from source"),
+		}
+		require.EqualError(
+			t,
+			vdbEnv.DBProvider.ImportFromSnapshot("testdb", nil, itr, fullScanIteratorValueFormat),
+			"error while reading from source",
+		)
+	})
+
+	t.Run("error-while-decoding", func(t *testing.T) {
+		vdbEnv.init(t, nil)
+		defer vdbEnv.cleanup()
+
+		itr := &dummyFullScanIter{
+			key: &statedb.CompositeKey{
+				Namespace: "ns1",
+				Key:       "key1",
+			},
+			value: []byte("random"),
+		}
+		require.EqualError(
+			t,
+			vdbEnv.DBProvider.ImportFromSnapshot("testdb", nil, itr, fullScanIteratorValueFormat),
+			"error while decoding the encoded ValueVersionMetadata of key key1: unexpected EOF",
+		)
+	})
+
+	t.Run("error-creating-database", func(t *testing.T) {
+		vdbEnv.init(t, nil)
+		configBackup := *vdbEnv.config
+		defer func() {
+			vdbEnv.config = &configBackup
+			vdbEnv.cleanup()
+		}()
+
+		vdb, err := vdbEnv.DBProvider.GetDBHandle("testdb", nil)
+		require.NoError(t, err)
+		nsDB, err := vdb.(*VersionedDB).getNamespaceDBHandle("ns")
+		require.NoError(t, err)
+
+		vdbEnv.config.MaxRetries = 1
+		vdbEnv.config.MaxRetriesOnStartup = 1
+		vdbEnv.config.RequestTimeout = 1 * time.Second
+		vdbEnv.config.Address = "127.0.0.1:1"
+
+		// creating database for the first encountered namespace
+		s := &snapshotImporter{
+			vdb: vdb.(*VersionedDB),
+			itr: &dummyFullScanIter{
+				key: &statedb.CompositeKey{
+					Namespace: "ns1",
+				},
+			},
+			valueFormat: fullScanIteratorValueFormat,
+		}
+		require.Contains(
+			t,
+			s.importState().Error(),
+			"error while creating database for the namespace ns1",
+		)
+
+		// creating database as next namespace
+		// does not match the current namespace
+		s = &snapshotImporter{
+			vdb: vdb.(*VersionedDB),
+			itr: &dummyFullScanIter{
+				key: &statedb.CompositeKey{
+					Namespace: "ns2",
+				},
+			},
+			currentNsDB: nsDB,
+			currentNs:   "ns",
+			valueFormat: fullScanIteratorValueFormat,
+		}
+		require.Contains(
+			t,
+			s.importState().Error(),
+			"error while creating database for the namespace ns2",
+		)
+	})
+
+	t.Run("error-while-storing", func(t *testing.T) {
+		vdbEnv.init(t, nil)
+		configBackup := *vdbEnv.config
+		defer func() {
+			vdbEnv.config = &configBackup
+			vdbEnv.cleanup()
+		}()
+
+		vdb, err := vdbEnv.DBProvider.GetDBHandle("testdb", nil)
+		require.NoError(t, err)
+		ns1DB, err := vdb.(*VersionedDB).getNamespaceDBHandle("ns1")
+		require.NoError(t, err)
+
+		vdbEnv.config.MaxRetries = 1
+		vdbEnv.config.MaxRetriesOnStartup = 1
+		vdbEnv.config.RequestTimeout = 1 * time.Second
+		vdbEnv.config.Address = "127.0.0.1:1"
+
+		// same namespace but the pending doc limit reached
+		s := &snapshotImporter{
+			vdb: vdb.(*VersionedDB),
+			itr: &dummyFullScanIter{
+				key: &statedb.CompositeKey{
+					Namespace: "ns1",
+				},
+			},
+			currentNsDB:      ns1DB,
+			currentNs:        "ns1",
+			pendingDocsBatch: []*couchDoc{{}, {}},
+			batchMemorySize:  4 * 1024 * 1024,
+			valueFormat:      fullScanIteratorValueFormat,
+		}
+		require.Contains(
+			t,
+			s.importState().Error(),
+			"error while storing 3 states associated with namespace ns1",
+		)
+
+		// next namespace does not match the current namespace
+		s = &snapshotImporter{
+			vdb: vdb.(*VersionedDB),
+			itr: &dummyFullScanIter{
+				key: &statedb.CompositeKey{
+					Namespace: "ns2",
+				},
+			},
+			currentNsDB:      ns1DB,
+			currentNs:        "ns1",
+			pendingDocsBatch: []*couchDoc{{}, {}},
+			valueFormat:      fullScanIteratorValueFormat,
+		}
+		require.Contains(
+			t,
+			s.importState().Error(),
+			"error while storing 2 states associated with namespace ns1",
+		)
+	})
+}
+
+func TestVersionFromSnapshotValue(t *testing.T) {
 	vdbEnv.init(t, nil)
 	defer vdbEnv.cleanup()
 
-	commontests.TestDataExportImport(
+	commontests.TestVersionFromSnapshotValue(
 		t,
 		vdbEnv.DBProvider,
-		byte(1),
+		VersionFromSnapshotValue,
 	)
 }
 
@@ -1760,7 +1953,7 @@ func TestFullScanIteratorDeterministicJSONOutput(t *testing.T) {
 	for _, d := range sampleDataWithSortedJSON {
 		batch.PutValAndMetadata(d.Namespace, d.Key, d.Value, d.Metadata, d.Version)
 	}
-	db.ApplyUpdates(batch, version.NewHeight(1, 1))
+	require.NoError(t, db.ApplyUpdates(batch, version.NewHeight(1, 1)))
 
 	retrieveOnlyNs1 := func(ns string) bool {
 		return ns != "ns1"
@@ -1777,7 +1970,7 @@ func TestFullScanIteratorDeterministicJSONOutput(t *testing.T) {
 	for _, d := range sampleDataWithUnsortedJSON {
 		batch.PutValAndMetadata(d.Namespace, d.Key, d.Value, d.Metadata, d.Version)
 	}
-	db.ApplyUpdates(batch, version.NewHeight(1, 1))
+	require.NoError(t, db.ApplyUpdates(batch, version.NewHeight(1, 1)))
 
 	retrieveOnlyNs2 := func(ns string) bool {
 		return ns != "ns2"
@@ -1824,7 +2017,7 @@ func TestFullScanIteratorSkipInternalKeys(t *testing.T) {
 	for _, d := range sampleData {
 		batch.PutValAndMetadata(d.Namespace, d.Key, d.Value, d.Metadata, d.Version)
 	}
-	db.ApplyUpdates(batch, version.NewHeight(1, 1))
+	require.NoError(t, db.ApplyUpdates(batch, version.NewHeight(1, 1)))
 
 	retrieveOnlyNs1 := func(ns string) bool {
 		return ns != "ns1"
@@ -1840,7 +2033,7 @@ func TestFullScanIteratorSkipInternalKeys(t *testing.T) {
 	for _, d := range sampleData {
 		batch.PutValAndMetadata(d.Namespace, d.Key, d.Value, d.Metadata, d.Version)
 	}
-	db.ApplyUpdates(batch, version.NewHeight(1, 1))
+	require.NoError(t, db.ApplyUpdates(batch, version.NewHeight(1, 1)))
 
 	retrieveOnlyEmptyNs := func(ns string) bool {
 		return ns != ""
@@ -1873,4 +2066,52 @@ func verifyFullScanIterator(
 		results = append(results, &statedb.VersionedKV{CompositeKey: *ck, VersionedValue: *val})
 	}
 	require.Equal(t, expectedResult, results)
+}
+
+func TestDrop(t *testing.T) {
+	vdbEnv.init(t, nil)
+	defer vdbEnv.cleanup()
+
+	checkDBsAfterDropFunc := func(channelName string) {
+		appDBNames := RetrieveApplicationDBNames(t, vdbEnv.config)
+		for _, dbName := range appDBNames {
+			require.NotContains(t, dbName, channelName+"_")
+		}
+	}
+
+	commontests.TestDrop(t, vdbEnv.DBProvider, checkDBsAfterDropFunc)
+}
+
+func TestDropErrorPath(t *testing.T) {
+	vdbEnv.init(t, nil)
+	defer vdbEnv.cleanup()
+	channelName := "testdroperror"
+
+	_, err := vdbEnv.DBProvider.GetDBHandle(channelName, nil)
+	require.NoError(t, err)
+
+	vdbEnv.config.MaxRetries = 1
+	vdbEnv.config.MaxRetriesOnStartup = 1
+	vdbEnv.config.RequestTimeout = 1 * time.Second
+	origAddress := vdbEnv.config.Address
+	vdbEnv.config.Address = "127.0.0.1:1"
+	err = vdbEnv.DBProvider.Drop(channelName)
+	require.Contains(t, err.Error(), "connection refused")
+	vdbEnv.config.Address = origAddress
+
+	vdbEnv.DBProvider.Close()
+	require.EqualError(t, vdbEnv.DBProvider.Drop(channelName), "internal leveldb error while obtaining db iterator: leveldb: closed")
+}
+
+type dummyFullScanIter struct {
+	err   error
+	key   *statedb.CompositeKey
+	value []byte
+}
+
+func (d *dummyFullScanIter) Next() (*statedb.CompositeKey, []byte, error) {
+	return d.key, d.value, d.err
+}
+
+func (d *dummyFullScanIter) Close() {
 }

@@ -28,7 +28,7 @@ var (
 func New(opts PKCS11Opts, keyStore bccsp.KeyStore) (bccsp.BCCSP, error) {
 	// Init config
 	conf := &config{}
-	err := conf.setSecurityLevel(opts.SecLevel, opts.HashFamily)
+	err := conf.setSecurityLevel(opts.Security, opts.Hash)
 	if err != nil {
 		return nil, errors.Wrapf(err, "Failed initializing configuration")
 	}
@@ -38,7 +38,7 @@ func New(opts PKCS11Opts, keyStore bccsp.KeyStore) (bccsp.BCCSP, error) {
 		return nil, errors.New("Invalid bccsp.KeyStore instance. It must be different from nil")
 	}
 
-	swCSP, err := sw.NewWithParams(opts.SecLevel, opts.HashFamily, keyStore)
+	swCSP, err := sw.NewWithParams(opts.Security, opts.Hash, keyStore)
 	if err != nil {
 		return nil, errors.Wrapf(err, "Failed initializing fallback SW BCCSP")
 	}
@@ -61,7 +61,7 @@ func New(opts PKCS11Opts, keyStore bccsp.KeyStore) (bccsp.BCCSP, error) {
 		slot:       slot,
 		pin:        pin,
 		lib:        lib,
-		softVerify: opts.SoftVerify,
+		softVerify: opts.SoftwareVerify,
 		immutable:  opts.Immutable,
 	}
 	csp.returnSession(*session)
@@ -162,13 +162,14 @@ func (csp *impl) KeyImport(raw interface{}, opts bccsp.KeyImportOpts) (k bccsp.K
 // the Subject Key Identifier ski.
 func (csp *impl) GetKey(ski []byte) (bccsp.Key, error) {
 	pubKey, isPriv, err := csp.getECKey(ski)
-	if err == nil {
-		if isPriv {
-			return &ecdsaPrivateKey{ski, ecdsaPublicKey{ski, pubKey}}, nil
-		}
-		return &ecdsaPublicKey{ski, pubKey}, nil
+	if err != nil {
+		logger.Debugf("Key not found using PKCS11: %v", err)
+		return csp.BCCSP.GetKey(ski)
 	}
-	return csp.BCCSP.GetKey(ski)
+	if isPriv {
+		return &ecdsaPrivateKey{ski, ecdsaPublicKey{ski, pubKey}}, nil
+	}
+	return &ecdsaPublicKey{ski, pubKey}, nil
 }
 
 // Sign signs digest using key k.

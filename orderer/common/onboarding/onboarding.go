@@ -7,12 +7,12 @@ SPDX-License-Identifier: Apache-2.0
 package onboarding
 
 import (
-	"github.com/hyperledger/fabric-config/protolator"
 	"os"
 	"sync"
 	"time"
 
 	"github.com/golang/protobuf/proto"
+	"github.com/hyperledger/fabric-config/protolator"
 	"github.com/hyperledger/fabric-protos-go/common"
 	"github.com/hyperledger/fabric/bccsp"
 	"github.com/hyperledger/fabric/common/channelconfig"
@@ -330,21 +330,6 @@ func (dc *InactiveChainReplicator) listInactiveChains() []string {
 		chains = append(chains, chain)
 	}
 	return chains
-}
-
-//go:generate mockery -dir . -name Factory -case underscore  -output mocks/
-
-// Factory retrieves or creates new ledgers by chainID
-type Factory interface {
-	// GetOrCreate gets an existing ledger (if it exists)
-	// or creates it if it does not
-	GetOrCreate(chainID string) (blockledger.ReadWriter, error)
-
-	// ChannelIDs returns the channel IDs the Factory is aware of
-	ChannelIDs() []string
-
-	// Close releases all resources acquired by the factory
-	Close()
 }
 
 type blockGetter struct {

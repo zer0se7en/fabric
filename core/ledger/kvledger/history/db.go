@@ -17,6 +17,7 @@ import (
 	"github.com/hyperledger/fabric/core/ledger/kvledger/txmgmt/rwsetutil"
 	"github.com/hyperledger/fabric/internal/pkg/txflags"
 	protoutil "github.com/hyperledger/fabric/protoutil"
+	"github.com/pkg/errors"
 )
 
 var logger = flogging.MustGetLogger("history")
@@ -43,18 +44,29 @@ func NewDBProvider(path string) (*DBProvider, error) {
 	}, nil
 }
 
+// MarkStartingSavepoint creates historydb to be used for a ledger that is created from a snapshot
+func (p *DBProvider) MarkStartingSavepoint(name string, savepoint *version.Height) error {
+	db := p.GetDBHandle(name)
+	err := db.levelDB.Put(savePointKey, savepoint.ToBytes(), true)
+	return errors.WithMessagef(err, "error while writing the starting save point for ledger [%s]", name)
+}
+
 // GetDBHandle gets the handle to a named database
-func (p *DBProvider) GetDBHandle(name string) (*DB, error) {
+func (p *DBProvider) GetDBHandle(name string) *DB {
 	return &DB{
-			levelDB: p.leveldbProvider.GetDBHandle(name),
-			name:    name,
-		},
-		nil
+		levelDB: p.leveldbProvider.GetDBHandle(name),
+		name:    name,
+	}
 }
 
 // Close closes the underlying db
 func (p *DBProvider) Close() {
 	p.leveldbProvider.Close()
+}
+
+// Drop drops channel-specific data from the history db
+func (p *DBProvider) Drop(channelName string) error {
+	return p.leveldbProvider.Drop(channelName)
 }
 
 // DB maintains and provides access to history data for a particular channel
@@ -190,9 +202,5 @@ func (d *DB) CommitLostBlock(blockAndPvtdata *ledger.BlockAndPvtData) error {
 	} else {
 		logger.Debugf("Recommitting block [%d] to history database", block.Header.Number)
 	}
-
-	if err := d.Commit(block); err != nil {
-		return err
-	}
-	return nil
+	return d.Commit(block)
 }

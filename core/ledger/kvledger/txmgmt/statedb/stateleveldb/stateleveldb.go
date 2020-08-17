@@ -54,9 +54,22 @@ func (provider *VersionedDBProvider) GetDBHandle(dbName string, namespaceProvide
 	return newVersionedDB(provider.dbProvider.GetDBHandle(dbName), dbName), nil
 }
 
+// ImportFromSnapshot loads the public state and pvtdata hashes from the snapshot files previously generated
+func (provider *VersionedDBProvider) ImportFromSnapshot(
+	dbName string, savepoint *version.Height, itr statedb.FullScanIterator, dbValueFormat byte) error {
+	vdb := newVersionedDB(provider.dbProvider.GetDBHandle(dbName), dbName)
+	return vdb.importState(itr, savepoint, dbValueFormat)
+}
+
 // Close closes the underlying db
 func (provider *VersionedDBProvider) Close() {
 	provider.dbProvider.Close()
+}
+
+// Drop drops channel-specific data from the state leveldb.
+// It is not an error if a database does not exist.
+func (provider *VersionedDBProvider) Drop(dbName string) error {
+	return provider.dbProvider.Drop(dbName)
 }
 
 // VersionedDB implements VersionedDB interface
@@ -190,10 +203,7 @@ func (vdb *versionedDB) ApplyUpdates(batch *statedb.UpdateBatch, height *version
 		dbBatch.Put(savePointKey, height.ToBytes())
 	}
 	// Setting snyc to true as a precaution, false may be an ok optimization after further testing.
-	if err := vdb.db.WriteBatch(dbBatch, true); err != nil {
-		return err
-	}
-	return nil
+	return vdb.db.WriteBatch(dbBatch, true)
 }
 
 // GetLatestSavePoint implements method in VersionedDB interface
@@ -221,10 +231,13 @@ func (vdb *versionedDB) GetFullScanIterator(skipNamespace func(string) bool) (st
 	return newFullDBScanner(vdb.db, skipNamespace)
 }
 
-// ImportState implements method in VersionedDB interface. The function is expected to be used
+// importState implements method in VersionedDB interface. The function is expected to be used
 // for importing the state from a previously snapshotted state. The parameter itr provides access to
 // the snapshotted state.
-func (vdb *versionedDB) ImportState(itr statedb.FullScanIterator, dbValueFormat byte) error {
+func (vdb *versionedDB) importState(itr statedb.FullScanIterator, savepoint *version.Height, dbValueFormat byte) error {
+	if itr == nil {
+		return vdb.db.Put(savePointKey, savepoint.ToBytes(), true)
+	}
 	if dbValueFormat != fullScanIteratorValueFormat {
 		return errors.Errorf("value format [%x] not supported. Expected value format [%x]",
 			dbValueFormat, fullScanIteratorValueFormat)
@@ -250,6 +263,7 @@ func (vdb *versionedDB) ImportState(itr statedb.FullScanIterator, dbValueFormat 
 			dbBatch.Reset()
 		}
 	}
+	dbBatch.Put(savePointKey, savepoint.ToBytes())
 	return vdb.db.WriteBatch(dbBatch, true)
 }
 
@@ -285,7 +299,7 @@ func newKVScanner(namespace string, dbItr iterator.Iterator, requestedLimit int3
 	return &kvScanner{namespace, dbItr, requestedLimit, 0}
 }
 
-func (scanner *kvScanner) Next() (statedb.QueryResult, error) {
+func (scanner *kvScanner) Next() (*statedb.VersionedKV, error) {
 	if scanner.requestedLimit > 0 && scanner.totalRecordsReturned >= scanner.requestedLimit {
 		return nil, nil
 	}

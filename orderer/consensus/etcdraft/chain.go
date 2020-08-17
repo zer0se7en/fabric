@@ -10,7 +10,6 @@ import (
 	"context"
 	"encoding/pem"
 	"fmt"
-	"github.com/hyperledger/fabric/orderer/common/types"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -23,6 +22,7 @@ import (
 	"github.com/hyperledger/fabric/bccsp"
 	"github.com/hyperledger/fabric/common/flogging"
 	"github.com/hyperledger/fabric/orderer/common/cluster"
+	"github.com/hyperledger/fabric/orderer/common/types"
 	"github.com/hyperledger/fabric/orderer/consensus"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
@@ -369,6 +369,7 @@ func (c *Chain) Start() {
 	c.periodicChecker = &PeriodicCheck{
 		Logger:        c.logger,
 		Report:        es.confirmSuspicion,
+		ReportCleared: es.clearSuspicion,
 		CheckInterval: interval,
 		Condition:     c.suspectEviction,
 	}
@@ -427,7 +428,13 @@ func (c *Chain) Halt() {
 		return
 	}
 	<-c.doneC
+}
 
+// halt stops the chain and calls the haltCallback function, which allows the
+// chain to transfer responsbility to a follower or inactive chain when a chain
+// discovers it is no longer a member of a channel
+func (c *Chain) halt() {
+	c.Halt()
 	if c.haltCallback != nil {
 		c.haltCallback()
 	}
@@ -462,7 +469,7 @@ func (c *Chain) Consensus(req *orderer.ConsensusRequest, sender uint64) error {
 
 	if stepMsg.To != c.raftID {
 		c.logger.Warnf("Received msg to %d, my ID is probably wrong due to out of date, cowardly halting", stepMsg.To)
-		c.Halt()
+		c.halt()
 		return nil
 	}
 
@@ -1041,7 +1048,7 @@ func (c *Chain) apply(ents []raftpb.Entry) {
 
 				if shouldHalt {
 					c.logger.Infof("This node is being removed from replica set")
-					c.Halt()
+					c.halt()
 					return
 				}
 			}()
@@ -1353,7 +1360,7 @@ func (c *Chain) newEvictionSuspector() *evictionSuspector {
 		triggerCatchUp:             c.triggerCatchup,
 		logger:                     c.logger,
 		halt: func() {
-			c.Halt()
+			c.halt()
 		},
 	}
 }

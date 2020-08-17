@@ -12,7 +12,7 @@ import (
 
 	protopeer "github.com/hyperledger/fabric-protos-go/peer"
 	"github.com/hyperledger/fabric/core/ledger"
-	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type submittedData map[string]*submittedLedgerData
@@ -42,12 +42,12 @@ func (s submittedData) recordSubmittedTxs(lgrid string, tx ...*txAndPvtdata) {
 
 type sampleDataHelper struct {
 	submittedData submittedData
-	assert        *assert.Assertions
+	assert        *require.Assertions
 	t             *testing.T
 }
 
 func newSampleDataHelper(t *testing.T) *sampleDataHelper {
-	return &sampleDataHelper{make(submittedData), assert.New(t), t}
+	return &sampleDataHelper{make(submittedData), require.New(t), t}
 }
 
 func (d *sampleDataHelper) populateLedger(h *testhelper) {
@@ -104,9 +104,9 @@ func (d *sampleDataHelper) populateLedger(h *testhelper) {
 	// blk7 contains one data txs
 	txdata7 := h.simulateDataTx("txid7", func(s *simulator) {
 		s.setState("cc1", "key1", d.sampleVal("value13", lgrid))
-		s.DeleteState("cc1", "key2")
+		require.NoError(d.t, s.DeleteState("cc1", "key2"))
 		s.setPvtdata("cc1", "coll1", "key3", d.sampleVal("value14", lgrid))
-		s.DeletePrivateData("cc1", "coll1", "key4")
+		require.NoError(d.t, s.DeletePrivateData("cc1", "coll1", "key4"))
 	})
 	h.simulatedTrans = nil
 

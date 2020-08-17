@@ -22,6 +22,11 @@ import (
 	"github.com/hyperledger/fabric/common/metrics"
 )
 
+const (
+	GoLevelDB = "goleveldb"
+	CouchDB   = "CouchDB"
+)
+
 // Initializer encapsulates dependencies for PeerLedgerProvider
 type Initializer struct {
 	StateListeners                  []StateListener
@@ -52,7 +57,7 @@ type Config struct {
 // StateDBConfig is a structure used to configure the state parameters for the ledger.
 type StateDBConfig struct {
 	// StateDatabase is the database to use for storing last known state.  The
-	// two supported options are "goleveldb" and "CouchDB".
+	// two supported options are "goleveldb" and "CouchDB" (captured in the constants GoLevelDB and CouchDB respectively).
 	StateDatabase string
 	// CouchDB is the configuration for CouchDB.  It is used when StateDatabase
 	// is set to "CouchDB".
@@ -123,10 +128,12 @@ type SnapshotsConfig struct {
 
 // PeerLedgerProvider provides handle to ledger instances
 type PeerLedgerProvider interface {
-	// Create creates a new ledger with the given genesis block.
+	// CreateFromGenesisBlock creates a new ledger with the given genesis block.
 	// This function guarantees that the creation of ledger and committing the genesis block would an atomic action
 	// The chain id retrieved from the genesis block is treated as a ledger id
-	Create(genesisBlock *common.Block) (PeerLedger, error)
+	CreateFromGenesisBlock(genesisBlock *common.Block) (PeerLedger, error)
+	// CreateFromSnapshot creates a new ledger from a snapshot
+	CreateFromSnapshot(snapshotDir string) (PeerLedger, error)
 	// Open opens an already created ledger
 	Open(ledgerID string) (PeerLedger, error)
 	// Exists tells whether the ledger with given id exists
@@ -187,6 +194,30 @@ type PeerLedger interface {
 	//     missing info is recorded in the ledger (or)
 	// (3) the block is committed and does not contain any pvtData.
 	DoesPvtDataInfoExist(blockNum uint64) (bool, error)
+
+	// SubmitSnapshotRequest submits a snapshot request for the specified height.
+	// The request will be stored in the ledger until the ledger's block height is equal to
+	// the specified height and the snapshot generation is completed.
+	// When height is 0, it will generate a snapshot at the current block height.
+	// It returns an error if the specified height is smaller than the ledger's block height.
+	SubmitSnapshotRequest(height uint64) error
+	// CancelSnapshotRequest cancels the previously submitted request.
+	// It returns an error if such a request does not exist or is under processing.
+	CancelSnapshotRequest(height uint64) error
+	// PendingSnapshotRequests returns a list of heights for the pending (or under processing) snapshot requests.
+	PendingSnapshotRequests() ([]uint64, error)
+	// ListSnapshots returns the information for available snapshots.
+	// It returns a list of strings representing the following JSON object:
+	// type snapshotSignableMetadata struct {
+	//    ChannelName        string            `json:"channel_name"`
+	//    ChannelHeight      uint64            `json:"channel_height"`
+	//    LastBlockHashInHex string            `json:"last_block_hash"`
+	//    FilesAndHashes     map[string]string `json:"snapshot_files_raw_hashes"`
+	// }
+	ListSnapshots() ([]string, error)
+	// DeleteSnapshot deletes the snapshot files except the metadata file.
+	// It returns an error if no such a snapshot exists.
+	DeleteSnapshot(height uint64) error
 }
 
 // SimpleQueryExecutor encapsulates basic functions
@@ -330,16 +361,16 @@ type MissingPvtData struct {
 	IsEligible bool
 }
 
-// TxMissingPvtDataMap is a map from txNum to the list of
+// TxMissingPvtData is a map from txNum to the list of
 // missing pvtData
-type TxMissingPvtDataMap map[uint64][]*MissingPvtData
+type TxMissingPvtData map[uint64][]*MissingPvtData
 
 // BlockAndPvtData encapsulates the block and a map that contains the tuples <seqInBlock, *TxPvtData>
 // The map is expected to contain the entries only for the transactions that has associated pvt data
 type BlockAndPvtData struct {
 	Block          *common.Block
 	PvtData        TxPvtDataMap
-	MissingPvtData TxMissingPvtDataMap
+	MissingPvtData TxMissingPvtData
 }
 
 // ReconciledPvtdata contains the private data for a block for reconciliation
@@ -349,7 +380,7 @@ type ReconciledPvtdata struct {
 }
 
 // Add adds a given missing private data in the MissingPrivateDataList
-func (txMissingPvtData TxMissingPvtDataMap) Add(txNum uint64, ns, coll string, isEligible bool) {
+func (txMissingPvtData TxMissingPvtData) Add(txNum uint64, ns, coll string, isEligible bool) {
 	txMissingPvtData[txNum] = append(txMissingPvtData[txNum], &MissingPvtData{ns, coll, isEligible})
 }
 
@@ -380,7 +411,7 @@ type CollectionPvtdataInfo struct {
 // private data for use at commit time
 type BlockPvtdata struct {
 	PvtData        TxPvtDataMap
-	MissingPvtData TxMissingPvtDataMap
+	MissingPvtData TxMissingPvtData
 }
 
 // CommitOptions encapsulates options associated with a block commit.
@@ -499,7 +530,6 @@ type KVStateUpdates struct {
 
 // ConfigHistoryRetriever allow retrieving history of collection configs
 type ConfigHistoryRetriever interface {
-	CollectionConfigAt(blockNum uint64, chaincodeName string) (*CollectionConfigInfo, error)
 	MostRecentCollectionConfigBelow(blockNum uint64, chaincodeName string) (*CollectionConfigInfo, error)
 }
 

@@ -39,11 +39,6 @@ var couchdbLogger = flogging.MustGetLogger("couchdb")
 //time between retry attempts in milliseconds
 const retryWaitTime = 125
 
-// dbOperationResponse is body for successful database calls.
-type dbOperationResponse struct {
-	Ok bool
-}
-
 // dbInfo is body for database information.
 type dbInfo struct {
 	DbName string `json:"db_name"`
@@ -146,6 +141,13 @@ type attachmentInfo struct {
 	AttachmentBytes []byte `json:"data"`
 }
 
+func (a *attachmentInfo) len() int {
+	if a == nil {
+		return 0
+	}
+	return len(a.Name) + len(a.ContentType) + len(a.AttachmentBytes)
+}
+
 //fileDetails defines the structure needed to send an attachment to couchdb
 type fileDetails struct {
 	Follows     bool   `json:"follows"`
@@ -211,7 +213,17 @@ func (d *couchDoc) key() (string, error) {
 		return "", err
 	}
 	return m[idField].(string), nil
+}
 
+func (d *couchDoc) len() int {
+	if d == nil {
+		return 0
+	}
+	size := len(d.jsonValue)
+	for _, a := range d.attachments {
+		size += a.len()
+	}
+	return size
 }
 
 // closeResponseBody discards the body and then closes it to enable returning it to
@@ -474,7 +486,7 @@ func (couchInstance *couchInstance) url() string {
 }
 
 //dropDatabase provides method to drop an existing database
-func (dbclient *couchDatabase) dropDatabase() (*dbOperationResponse, error) {
+func (dbclient *couchDatabase) dropDatabase() error {
 	dbName := dbclient.dbName
 
 	couchdbLogger.Debugf("[%s] Entering DropDatabase()", dbName)
@@ -482,35 +494,24 @@ func (dbclient *couchDatabase) dropDatabase() (*dbOperationResponse, error) {
 	connectURL, err := url.Parse(dbclient.couchInstance.url())
 	if err != nil {
 		couchdbLogger.Errorf("URL parse error: %s", err)
-		return nil, errors.Wrapf(err, "error parsing CouchDB URL: %s", dbclient.couchInstance.url())
+		return errors.Wrapf(err, "error parsing CouchDB URL: %s", dbclient.couchInstance.url())
 	}
 
 	//get the number of retries
 	maxRetries := dbclient.couchInstance.conf.MaxRetries
 
-	resp, _, err := dbclient.handleRequest(http.MethodDelete, "DropDatabase", connectURL, nil, "", "", maxRetries, true, nil)
-	if err != nil {
-		return nil, err
-	}
+	resp, couchdbReturn, err := dbclient.handleRequest(http.MethodDelete, "DropDatabase", connectURL, nil, "", "", maxRetries, true, nil)
 	defer closeResponseBody(resp)
-
-	dbResponse := &dbOperationResponse{}
-	decodeErr := json.NewDecoder(resp.Body).Decode(&dbResponse)
-	if decodeErr != nil {
-		return nil, errors.Wrap(decodeErr, "error decoding response body")
+	if couchdbReturn != nil && couchdbReturn.StatusCode == 404 {
+		couchdbLogger.Debugf("[%s] Exiting DropDatabase(), database does not exist", dbclient.dbName)
+		return nil
+	}
+	if err != nil {
+		return err
 	}
 
-	if dbResponse.Ok {
-		couchdbLogger.Debugf("[%s] Dropped database", dbclient.dbName)
-	}
-
-	couchdbLogger.Debugf("[%s] Exiting DropDatabase()", dbclient.dbName)
-
-	if dbResponse.Ok {
-		return dbResponse, nil
-	}
-
-	return dbResponse, errors.New("error dropping database")
+	couchdbLogger.Debugf("[%s] Exiting DropDatabase(), database dropped", dbclient.dbName)
+	return nil
 }
 
 //saveDoc method provides a function to save a document, id and byte array
@@ -1468,6 +1469,23 @@ func (dbclient *couchDatabase) batchRetrieveDocumentMetadata(keys []string) ([]*
 
 	return docMetadataArray, nil
 
+}
+
+func (dbClient *couchDatabase) insertDocuments(docs []*couchDoc) error {
+	responses, err := dbClient.batchUpdateDocuments(docs)
+	if err != nil {
+		return errors.WithMessage(err, "error while updating docs in bulk")
+	}
+
+	for i, resp := range responses {
+		if resp.Ok {
+			continue
+		}
+		if _, err := dbClient.saveDoc(resp.ID, "", docs[i]); err != nil {
+			return errors.WithMessagef(err, "error while storing doc with ID %s", resp.ID)
+		}
+	}
+	return nil
 }
 
 //batchUpdateDocuments - batch method to batch update documents

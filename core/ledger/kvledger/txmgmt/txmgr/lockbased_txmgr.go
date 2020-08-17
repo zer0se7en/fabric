@@ -93,7 +93,7 @@ type Initializer struct {
 	DB                  *privacyenabledstate.DB
 	StateListeners      []ledger.StateListener
 	BtlPolicy           pvtdatapolicy.BTLPolicy
-	BookkeepingProvider bookkeeping.Provider
+	BookkeepingProvider *bookkeeping.Provider
 	CCInfoProvider      ledger.DeployedChaincodeInfoProvider
 	CustomTxProcessors  map[common.HeaderType]ledger.CustomTxProcessor
 	HashFunc            rwsetutil.HashFunc
@@ -106,7 +106,9 @@ func NewLockBasedTxMgr(initializer *Initializer) (*LockBasedTxMgr, error) {
 		return nil, errors.New("create new lock based TxMgr failed: passed in nil ledger hasher")
 	}
 
-	initializer.DB.Open()
+	if err := initializer.DB.Open(); err != nil {
+		return nil, err
+	}
 	txmgr := &LockBasedTxMgr{
 		ledgerid:       initializer.LedgerID,
 		db:             initializer.DB,
@@ -270,10 +272,7 @@ func (txmgr *LockBasedTxMgr) RemoveStaleAndCommitPvtDataOfOldBlocks(reconciledPv
 
 	// (6) commit the pvt data to the stateDB
 	logger.Debug("Committing updates to state database")
-	if err := txmgr.db.ApplyPrivacyAwareUpdates(batch, nil); err != nil {
-		return err
-	}
-	return nil
+	return txmgr.db.ApplyPrivacyAwareUpdates(batch, nil)
 }
 
 type uniquePvtDataMap map[privacyenabledstate.HashedCompositeKey]*privacyenabledstate.PvtKVWrite

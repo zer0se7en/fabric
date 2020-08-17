@@ -35,7 +35,7 @@ General:
     ServerMinInterval: 60s
     ServerInterval: 7200s
     ServerTimeout: 20s
-  BootstrapMethod: file
+  BootstrapMethod: {{ .Consensus.BootstrapMethod }}
   BootstrapFile: {{ .RootDir }}/{{ .SystemChannel.Name }}_block.pb
   LocalMSPDir: {{ $w.OrdererLocalMSPDir Orderer }}
   LocalMSPID: {{ ($w.Organization Orderer.Organization).MSPID }}
@@ -53,7 +53,6 @@ General:
     TimeWindow: 15m
 FileLedger:
   Location: {{ .OrdererDir Orderer }}/system
-  Prefix: hyperledger-fabric-ordererledger
 {{ if eq .Consensus.Type "kafka" -}}
 Kafka:
   Retry:
@@ -118,6 +117,6 @@ Metrics:
     Prefix: {{ ReplaceAll (ToLower Orderer.ID) "." "_" }}
 {{- end }}
 ChannelParticipation:
-  Enabled: {{ .ChannelParticipationEnabled }}
+  Enabled: {{ .Consensus.ChannelParticipationEnabled }}
   MaxRequestBodySize: 1 MB
 `
