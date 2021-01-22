@@ -9,13 +9,12 @@ package etcdraft_test
 import (
 	"encoding/pem"
 	"fmt"
-	"github.com/hyperledger/fabric/core/config/configtest"
-	"github.com/hyperledger/fabric/internal/configtxgen/encoder"
-	"github.com/hyperledger/fabric/internal/configtxgen/genesisconfig"
 	"io/ioutil"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric-protos-go/common"
@@ -25,20 +24,44 @@ import (
 	"github.com/hyperledger/fabric/common/channelconfig"
 	"github.com/hyperledger/fabric/common/crypto/tlsgen"
 	"github.com/hyperledger/fabric/common/flogging"
+	"github.com/hyperledger/fabric/common/ledger/testutil"
+	"github.com/hyperledger/fabric/core/config/configtest"
+	"github.com/hyperledger/fabric/internal/configtxgen/encoder"
+	"github.com/hyperledger/fabric/internal/configtxgen/genesisconfig"
 	"github.com/hyperledger/fabric/internal/pkg/comm"
 	"github.com/hyperledger/fabric/orderer/common/cluster"
 	clustermocks "github.com/hyperledger/fabric/orderer/common/cluster/mocks"
-	"github.com/hyperledger/fabric/orderer/common/multichannel"
+	"github.com/hyperledger/fabric/orderer/common/types"
+	"github.com/hyperledger/fabric/orderer/consensus"
 	"github.com/hyperledger/fabric/orderer/consensus/etcdraft"
 	"github.com/hyperledger/fabric/orderer/consensus/etcdraft/mocks"
+	"github.com/hyperledger/fabric/orderer/consensus/inactive"
 	consensusmocks "github.com/hyperledger/fabric/orderer/consensus/mocks"
 	"github.com/hyperledger/fabric/protoutil"
 	. "github.com/onsi/ginkgo"
 	"github.com/onsi/ginkgo/extensions/table"
 	. "github.com/onsi/gomega"
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/mock"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
+)
+
+//These fixtures contain certificates for testing consenters.
+//In both folders certificates generated using tlsgen pkg, each certificate is singed by ca.pem inside corresponding folder.
+//Each cert has 10years expiration time (tlsgenCa.NewServerCertKeyPair("localhost")).
+
+//NOTE ONLY FOR GO 1.15+: prior to go1.15 tlsgen produced CA root cert without SubjectKeyId, which is not allowed by MSP validator.
+//In this test left tags @ONLY-GO1.15+ in places where fixtures can be replaced with tlsgen runtime generated certs once fabric moved to 1.15
+
+const (
+	consentersTestDataDir = "testdata/consenters_certs/"
+	ca1Dir                = consentersTestDataDir + "ca1"
+	ca2Dir                = consentersTestDataDir + "ca2"
+)
+
+var (
+	certAsPEM []byte
 )
 
 //go:generate counterfeiter -o mocks/orderer_capabilities.go --fake-name OrdererCapabilities . ordererCapabilities
@@ -55,20 +78,29 @@ type ordererConfig interface {
 
 var _ = Describe("Consenter", func() {
 	var (
-		certAsPEM          []byte
-		chainGetter        *mocks.ChainGetter
-		support            *consensusmocks.FakeConsenterSupport
-		dataDir            string
-		snapDir            string
-		walDir             string
-		genesisBlockApp    *common.Block
-		serverCertificates [][]byte
-		err                error
+		chainManager    *mocks.ChainManager
+		support         *consensusmocks.FakeConsenterSupport
+		dataDir         string
+		snapDir         string
+		walDir          string
+		mspDir          string
+		genesisBlockApp *common.Block
+		confAppRaft     *genesisconfig.Profile
+		tlsCA           tlsgen.CA
+		tlsCa1Cert      []byte
+		tlsCa2Cert      []byte
 	)
 
 	BeforeEach(func() {
-		certAsPEM = pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("cert bytes")})
-		chainGetter = &mocks.ChainGetter{}
+		var err error
+		tlsCA, err = tlsgen.NewCA()
+		Expect(err).NotTo(HaveOccurred())
+		kp, err := tlsCA.NewClientCertKeyPair()
+		Expect(err).NotTo(HaveOccurred())
+		if certAsPEM == nil {
+			certAsPEM = kp.Cert
+		}
+		chainManager = &mocks.ChainManager{}
 		support = &consensusmocks.FakeConsenterSupport{}
 		dataDir, err = ioutil.TempDir("", "consenter-")
 		Expect(err).NotTo(HaveOccurred())
@@ -94,28 +126,28 @@ var _ = Describe("Consenter", func() {
 		}
 
 		support.BlockReturns(lastBlock)
-
-		serverCertificates = nil
 		genesisBlockApp = nil
+		confAppRaft = nil
 	})
 
 	AfterEach(func() {
 		os.RemoveAll(dataDir)
+		os.RemoveAll(mspDir)
 	})
 
 	When("the consenter is extracting the channel", func() {
 		It("extracts successfully from step requests", func() {
-			consenter := newConsenter(chainGetter)
+			consenter := newConsenter(chainManager, tlsCA.CertBytes(), certAsPEM)
 			ch := consenter.TargetChannel(&orderer.ConsensusRequest{Channel: "mychannel"})
 			Expect(ch).To(BeIdenticalTo("mychannel"))
 		})
 		It("extracts successfully from submit requests", func() {
-			consenter := newConsenter(chainGetter)
+			consenter := newConsenter(chainManager, tlsCA.CertBytes(), certAsPEM)
 			ch := consenter.TargetChannel(&orderer.SubmitRequest{Channel: "mychannel"})
 			Expect(ch).To(BeIdenticalTo("mychannel"))
 		})
 		It("returns an empty string for the rest of the messages", func() {
-			consenter := newConsenter(chainGetter)
+			consenter := newConsenter(chainManager, tlsCA.CertBytes(), certAsPEM)
 			ch := consenter.TargetChannel(&common.Block{})
 			Expect(ch).To(BeEmpty())
 		})
@@ -124,7 +156,7 @@ var _ = Describe("Consenter", func() {
 	When("the consenter is asked about join-block membership", func() {
 		table.DescribeTable("identifies a bad block",
 			func(block *common.Block, errExpected string) {
-				consenter := newConsenter(chainGetter)
+				consenter := newConsenter(chainManager, tlsCA.CertBytes(), certAsPEM)
 				isMem, err := consenter.IsChannelMember(block)
 				Expect(isMem).To(BeFalse())
 				Expect(err).To(MatchError(errExpected))
@@ -142,11 +174,49 @@ var _ = Describe("Consenter", func() {
 		)
 
 		BeforeEach(func() {
-			tlsCA, _ := tlsgen.NewCA()
-			confAppRaft := genesisconfig.Load(genesisconfig.SampleDevModeEtcdRaftProfile, configtest.GetDevConfigDir())
+			confAppRaft = genesisconfig.Load(genesisconfig.SampleDevModeEtcdRaftProfile, configtest.GetDevConfigDir())
 			confAppRaft.Consortiums = nil
 			confAppRaft.Consortium = ""
-			serverCertificates = generateCertificates(confAppRaft, tlsCA, dataDir)
+
+			//@ONLY-GO1.15+
+			//it won't be needed, global var tlsCA will be used instead
+			var err error
+			tlsCa1Cert, err = ioutil.ReadFile(filepath.Join(ca1Dir, "ca.pem"))
+			Expect(err).NotTo(HaveOccurred())
+			tlsCa2Cert, err = ioutil.ReadFile(filepath.Join(ca2Dir, "ca.pem"))
+			Expect(err).NotTo(HaveOccurred())
+
+			//IsChannelMember verifies config meta along with it's tls certs of consenters.
+			//So when we add new conseter with tls certs, they must be signed by any msp from orderer config.
+			//Consenters in this test will have certificates from fixtures generated by tlsgen pkg. To pass validation, root ca cert should be part of a MSP in orderer config.
+			//Adding tls ca root cert to an existing ordering org's MSP definition.
+			mspDir, err = ioutil.TempDir("", "msp-")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(confAppRaft.Orderer).NotTo(BeNil())
+			Expect(confAppRaft.Orderer.Organizations).ToNot(HaveLen(0))
+			Expect(confAppRaft.Orderer.EtcdRaft.Consenters).ToNot(HaveLen(0))
+
+			//one consenter is enough for testing
+			confAppRaft.Orderer.EtcdRaft.Consenters = confAppRaft.Orderer.EtcdRaft.Consenters[:1]
+
+			//@ONLY-GO1.15+
+			//Here we would generate client pair using tlsCA and set it to the consenter
+			consenterCertPath := filepath.Join(ca1Dir, "client1.pem")
+			confAppRaft.Orderer.EtcdRaft.Consenters[0].ClientTlsCert = []byte(consenterCertPath)
+			confAppRaft.Orderer.EtcdRaft.Consenters[0].ServerTlsCert = []byte(consenterCertPath)
+
+			//Don't want to spoil sampleconfig, copying it to some tmp dir.
+			err = testutil.CopyDir(confAppRaft.Orderer.Organizations[0].MSPDir, mspDir, true)
+			Expect(err).NotTo(HaveOccurred())
+			confAppRaft.Orderer.Organizations[0].MSPDir = mspDir
+			confAppRaft.Orderer.Organizations[0].ID = fmt.Sprintf("SampleMSP-%d", time.Now().UnixNano())
+
+			//writing tls root cert to msp folder
+			//ONLY-GO1.15+ Here we would write tlsCA.CertBytes() instead
+			err = ioutil.WriteFile(filepath.Join(mspDir, "tlscacerts", "cert.pem"), tlsCa1Cert, 0644)
+
+			Expect(err).NotTo(HaveOccurred())
+
 			bootstrapper, err := encoder.NewBootstrapper(confAppRaft)
 			Expect(err).NotTo(HaveOccurred())
 			genesisBlockApp = bootstrapper.GenesisBlockForChannel("my-raft-channel")
@@ -154,74 +224,96 @@ var _ = Describe("Consenter", func() {
 		})
 
 		It("identifies a member block", func() {
-			consenter := newConsenter(chainGetter)
-			for i := 0; i < len(serverCertificates); i++ {
-				consenter.Cert = serverCertificates[i]
-				isMem, err := consenter.IsChannelMember(genesisBlockApp)
-				Expect(isMem).To(BeTrue())
-				Expect(err).NotTo(HaveOccurred())
-			}
+			//ONLY-GO1.15+
+			//Generate cert using tlsCA.NewClientCertKeyPair()
+
+			consenterCert, err := ioutil.ReadFile(filepath.Join(ca1Dir, "client1.pem"))
+			Expect(err).NotTo(HaveOccurred())
+
+			consenter := newConsenter(chainManager, tlsCa1Cert, consenterCert)
+
+			isMem, err := consenter.IsChannelMember(genesisBlockApp)
+			Expect(isMem).To(BeTrue())
+			Expect(err).NotTo(HaveOccurred())
 		})
 
 		It("identifies a non-member block", func() {
-			consenter := newConsenter(chainGetter)
-			consenter.Cert = certAsPEM
+			//ONLY-GO1.15+
+			//Generate cert using tlsCA.NewClientCertKeyPair()
+
+			nonMemberConsenterCert, err := ioutil.ReadFile(filepath.Join(ca1Dir, "client2.pem"))
+			Expect(err).NotTo(HaveOccurred())
+			consenter := newConsenter(chainManager, tlsCa1Cert, nonMemberConsenterCert)
+
 			isMem, err := consenter.IsChannelMember(genesisBlockApp)
 			Expect(isMem).To(BeFalse())
 			Expect(err).NotTo(HaveOccurred())
+		})
+
+		It("raft config has consenter with certificate that is not signed by any msp", func() {
+			//ONLY-GO1.15+
+			//Create new ca using tlsgen.NewCA() and generate certificate. New tls root cert won't be part of MSP.
+
+			foreignConsenterCertPath := filepath.Join(ca2Dir, "client.pem")
+			foreignConsenterCert, err := ioutil.ReadFile(foreignConsenterCertPath)
+			Expect(err).NotTo(HaveOccurred())
+			confAppRaft.Orderer.EtcdRaft.Consenters[0].ClientTlsCert = []byte(foreignConsenterCertPath)
+			confAppRaft.Orderer.EtcdRaft.Consenters[0].ServerTlsCert = []byte(foreignConsenterCertPath)
+
+			consenter := newConsenter(chainManager, tlsCa2Cert, foreignConsenterCert)
+
+			bootstrapper, err := encoder.NewBootstrapper(confAppRaft)
+			Expect(err).NotTo(HaveOccurred())
+			genesisBlockApp = bootstrapper.GenesisBlockForChannel("my-raft-channel")
+			Expect(genesisBlockApp).NotTo(BeNil())
+
+			isMem, err := consenter.IsChannelMember(genesisBlockApp)
+			Expect(isMem).To(BeFalse())
+			Expect(err).To(HaveOccurred())
 		})
 	})
 
 	When("the consenter is asked for a chain", func() {
 		cryptoProvider, _ := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
 		chainInstance := &etcdraft.Chain{CryptoProvider: cryptoProvider}
-		cs := &multichannel.ChainSupport{
-			Chain: chainInstance,
-			BCCSP: cryptoProvider,
-		}
 		BeforeEach(func() {
-			chainGetter.On("GetChain", "mychannel").Return(cs)
-			chainGetter.On("GetChain", "badChainObject").Return(&multichannel.ChainSupport{})
-			chainGetter.On("GetChain", "notmychannel").Return(nil)
-			chainGetter.On("GetChain", "notraftchain").Return(&multichannel.ChainSupport{
-				Chain: &multichannel.ChainSupport{},
-			})
+			chainManager.GetConsensusChainStub = func(channel string) consensus.Chain {
+				switch channel {
+				case "mychannel":
+					return chainInstance
+				case "notraftchain":
+					return &inactive.Chain{Err: errors.New("not a raft chain")}
+				default:
+					return nil
+				}
+			}
 		})
-		It("calls the chain getter and returns the reference when it is found", func() {
-			consenter := newConsenter(chainGetter)
+		It("calls the chain manager and returns the reference when it is found", func() {
+			consenter := newConsenter(chainManager, tlsCA.CertBytes(), certAsPEM)
 			Expect(consenter).NotTo(BeNil())
 
 			chain := consenter.ReceiverByChain("mychannel")
 			Expect(chain).NotTo(BeNil())
 			Expect(chain).To(BeIdenticalTo(chainInstance))
 		})
-		It("calls the chain getter and returns nil when it's not found", func() {
-			consenter := newConsenter(chainGetter)
+		It("calls the chain manager and returns nil when it's not found", func() {
+			consenter := newConsenter(chainManager, tlsCA.CertBytes(), certAsPEM)
 			Expect(consenter).NotTo(BeNil())
 
 			chain := consenter.ReceiverByChain("notmychannel")
 			Expect(chain).To(BeNil())
 		})
-		It("calls the chain getter and returns nil when it's not a raft chain", func() {
-			consenter := newConsenter(chainGetter)
+		It("calls the chain manager and returns nil when it's not a raft chain", func() {
+			consenter := newConsenter(chainManager, tlsCA.CertBytes(), certAsPEM)
 			Expect(consenter).NotTo(BeNil())
 
 			chain := consenter.ReceiverByChain("notraftchain")
 			Expect(chain).To(BeNil())
 		})
-		It("calls the chain getter and panics when the chain has a bad internal state", func() {
-			consenter := newConsenter(chainGetter)
-			Expect(consenter).NotTo(BeNil())
-
-			Expect(func() {
-				consenter.ReceiverByChain("badChainObject")
-			}).To(Panic())
-		})
 	})
 
 	It("successfully constructs a Chain", func() {
-		// We append a line feed to our cert, just to ensure that we can still consume it and ignore.
-		certAsPEMWithLineFeed := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("cert bytes")})
+		certAsPEMWithLineFeed := certAsPEM
 		certAsPEMWithLineFeed = append(certAsPEMWithLineFeed, []byte("\n")...)
 		m := &etcdraftproto.ConfigMetadata{
 			Consenters: []*etcdraftproto.Consenter{
@@ -244,15 +336,19 @@ var _ = Describe("Consenter", func() {
 		)
 		support.SharedConfigReturns(mockOrderer)
 
-		consenter := newConsenter(chainGetter)
+		consenter := newConsenter(chainManager, tlsCA.CertBytes(), certAsPEM)
 		consenter.EtcdRaftConfig.WALDir = walDir
 		consenter.EtcdRaftConfig.SnapDir = snapDir
 		// consenter.EtcdRaftConfig.EvictionSuspicion is missing
 		var defaultSuspicionFallback bool
+		var trackChainCallback bool
 		consenter.Metrics = newFakeMetrics(newFakeMetricsFields())
 		consenter.Logger = consenter.Logger.WithOptions(zap.Hooks(func(entry zapcore.Entry) error {
 			if strings.Contains(entry.Message, "EvictionSuspicion not set, defaulting to 10m0s") {
 				defaultSuspicionFallback = true
+			}
+			if strings.Contains(entry.Message, "With system channel: after eviction InactiveChainRegistry.TrackChain will be called") {
+				trackChainCallback = true
 			}
 			return nil
 		}))
@@ -263,11 +359,12 @@ var _ = Describe("Consenter", func() {
 
 		Expect(chain.Start).NotTo(Panic())
 		Expect(defaultSuspicionFallback).To(BeTrue())
+		Expect(trackChainCallback).To(BeTrue())
 	})
 
 	It("successfully constructs a Chain without a system channel", func() {
 		// We append a line feed to our cert, just to ensure that we can still consume it and ignore.
-		certAsPEMWithLineFeed := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("cert bytes")})
+		certAsPEMWithLineFeed := certAsPEM
 		certAsPEMWithLineFeed = append(certAsPEMWithLineFeed, []byte("\n")...)
 		m := &etcdraftproto.ConfigMetadata{
 			Consenters: []*etcdraftproto.Consenter{
@@ -290,7 +387,7 @@ var _ = Describe("Consenter", func() {
 		)
 		support.SharedConfigReturns(mockOrderer)
 
-		consenter := newConsenter(chainGetter)
+		consenter := newConsenter(chainManager, tlsCA.CertBytes(), certAsPEM)
 		consenter.EtcdRaftConfig.WALDir = walDir
 		consenter.EtcdRaftConfig.SnapDir = snapDir
 		//without a system channel, the InactiveChainRegistry is nil
@@ -299,10 +396,14 @@ var _ = Describe("Consenter", func() {
 
 		// consenter.EtcdRaftConfig.EvictionSuspicion is missing
 		var defaultSuspicionFallback bool
+		var switchToFollowerCallback bool
 		consenter.Metrics = newFakeMetrics(newFakeMetricsFields())
 		consenter.Logger = consenter.Logger.WithOptions(zap.Hooks(func(entry zapcore.Entry) error {
 			if strings.Contains(entry.Message, "EvictionSuspicion not set, defaulting to 10m0s") {
 				defaultSuspicionFallback = true
+			}
+			if strings.Contains(entry.Message, "Without system channel: after eviction Registrar.SwitchToFollower will be called") {
+				switchToFollowerCallback = true
 			}
 			return nil
 		}))
@@ -313,6 +414,7 @@ var _ = Describe("Consenter", func() {
 
 		Expect(chain.Start).NotTo(Panic())
 		Expect(defaultSuspicionFallback).To(BeTrue())
+		Expect(switchToFollowerCallback).To(BeTrue())
 		Expect(chain.Halt).NotTo(Panic())
 	})
 
@@ -340,13 +442,18 @@ var _ = Describe("Consenter", func() {
 		support.SharedConfigReturns(mockOrderer)
 		support.ChannelIDReturns("foo")
 
-		consenter := newConsenter(chainGetter)
+		consenter := newConsenter(chainManager, tlsCA.CertBytes(), certAsPEM)
 
 		chain, err := consenter.HandleChain(support, &common.Metadata{})
 		Expect(chain).To(Not(BeNil()))
 		Expect(err).To(Not(HaveOccurred()))
 		Expect(chain.Order(nil, 0).Error()).To(Equal("channel foo is not serviced by me"))
-		consenter.icr.AssertNumberOfCalls(testingInstance, "TrackChain", 1)
+		Expect(consenter.icr.TrackChainCallCount()).To(Equal(1))
+		Expect(chainManager.ReportConsensusRelationAndStatusMetricsCallCount()).To(Equal(1))
+		channel, relation, status := chainManager.ReportConsensusRelationAndStatusMetricsArgsForCall(0)
+		Expect(channel).To(Equal("foo"))
+		Expect(relation).To(Equal(types.ConsensusRelationConfigTracker))
+		Expect(status).To(Equal(types.StatusInactive))
 	})
 
 	It("fails to handle chain if etcdraft options have not been provided", func() {
@@ -365,7 +472,7 @@ var _ = Describe("Consenter", func() {
 		)
 		support.SharedConfigReturns(mockOrderer)
 
-		consenter := newConsenter(chainGetter)
+		consenter := newConsenter(chainManager, tlsCA.CertBytes(), certAsPEM)
 
 		chain, err := consenter.HandleChain(support, nil)
 		Expect(chain).To(BeNil())
@@ -395,11 +502,44 @@ var _ = Describe("Consenter", func() {
 		mockOrderer.CapabilitiesReturns(&mocks.OrdererCapabilities{})
 		support.SharedConfigReturns(mockOrderer)
 
-		consenter := newConsenter(chainGetter)
+		consenter := newConsenter(chainManager, tlsCA.CertBytes(), certAsPEM)
 
 		chain, err := consenter.HandleChain(support, nil)
 		Expect(chain).To(BeNil())
 		Expect(err).To(MatchError("failed to parse TickInterval (500) to time duration"))
+	})
+
+	When("the TickIntervalOverride is invalid", func() {
+		It("returns an error", func() {
+			m := &etcdraftproto.ConfigMetadata{
+				Consenters: []*etcdraftproto.Consenter{
+					{ServerTlsCert: certAsPEM},
+				},
+				Options: &etcdraftproto.Options{
+					TickInterval:      "500",
+					ElectionTick:      10,
+					HeartbeatTick:     1,
+					MaxInflightBlocks: 5,
+				},
+			}
+			metadata := protoutil.MarshalOrPanic(m)
+			mockOrderer := &mocks.OrdererConfig{}
+			mockOrderer.ConsensusMetadataReturns(metadata)
+			mockOrderer.BatchSizeReturns(
+				&orderer.BatchSize{
+					PreferredMaxBytes: 2 * 1024 * 1024,
+				},
+			)
+			mockOrderer.CapabilitiesReturns(&mocks.OrdererCapabilities{})
+			support.SharedConfigReturns(mockOrderer)
+
+			consenter := newConsenter(chainManager, tlsCA.CertBytes(), certAsPEM)
+			consenter.EtcdRaftConfig.TickIntervalOverride = "seven"
+
+			_, err := consenter.HandleChain(support, nil)
+			Expect(err).To(MatchError(HavePrefix("failed parsing Consensus.TickIntervalOverride:")))
+			Expect(err).To(MatchError(ContainSubstring("seven")))
+		})
 	})
 
 	It("returns an error if no matching cert found", func() {
@@ -426,14 +566,24 @@ var _ = Describe("Consenter", func() {
 		support.SharedConfigReturns(mockOrderer)
 		support.ChannelIDReturns("foo")
 
-		consenter := newConsenter(chainGetter)
-		//without a system channel, the InactiveChainRegistry is nil
-		consenter.InactiveChainRegistry = nil
-		consenter.icr = nil
+		consenter := newConsenter(chainManager, tlsCA.CertBytes(), certAsPEM)
+		// without a system channel, the InactiveChainRegistry is nil
+		consenter.RemoveInactiveChainRegistry()
 
 		chain, err := consenter.HandleChain(support, &common.Metadata{})
 		Expect(chain).To((BeNil()))
 		Expect(err).To(MatchError("without a system channel, a follower should have been created: not in the channel"))
+	})
+
+	It("removes the inactive chain registry (and doesn't panic upon retries)", func() {
+		consenter := newConsenter(chainManager, tlsCA.CertBytes(), certAsPEM)
+
+		consenter.RemoveInactiveChainRegistry()
+		Expect(consenter.icr.StopCallCount()).To(Equal(1))
+		Expect(consenter.InactiveChainRegistry).To(BeNil())
+
+		consenter.RemoveInactiveChainRegistry()
+		Expect(consenter.icr.StopCallCount()).To(Equal(1))
 	})
 })
 
@@ -442,24 +592,20 @@ type consenter struct {
 	icr *mocks.InactiveChainRegistry
 }
 
-func newConsenter(chainGetter *mocks.ChainGetter) *consenter {
+func newConsenter(chainManager *mocks.ChainManager, caCert, cert []byte) *consenter {
 	communicator := &clustermocks.Communicator{}
-	ca, err := tlsgen.NewCA()
-	Expect(err).NotTo(HaveOccurred())
 	communicator.On("Configure", mock.Anything, mock.Anything)
 	icr := &mocks.InactiveChainRegistry{}
-	icr.On("TrackChain", "foo", mock.Anything, mock.Anything)
-	certAsPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("cert bytes")})
 
 	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
 	Expect(err).NotTo(HaveOccurred())
 
 	c := &etcdraft.Consenter{
+		ChainManager:          chainManager,
 		InactiveChainRegistry: icr,
 		Communication:         communicator,
-		Cert:                  certAsPEM,
+		Cert:                  cert,
 		Logger:                flogging.MustGetLogger("test"),
-		Chains:                chainGetter,
 		Dispatcher: &etcdraft.Dispatcher{
 			Logger:        flogging.MustGetLogger("test"),
 			ChainSelector: &mocks.ReceiverGetter{},
@@ -467,7 +613,7 @@ func newConsenter(chainGetter *mocks.ChainGetter) *consenter {
 		Dialer: &cluster.PredicateDialer{
 			Config: comm.ClientConfig{
 				SecOpts: comm.SecureOptions{
-					Certificate: ca.CertBytes(),
+					Certificate: caCert,
 				},
 			},
 		},
@@ -480,7 +626,7 @@ func newConsenter(chainGetter *mocks.ChainGetter) *consenter {
 }
 
 func generateCertificates(confAppRaft *genesisconfig.Profile, tlsCA tlsgen.CA, certDir string) [][]byte {
-	certificats := [][]byte{}
+	certificates := [][]byte{}
 	for i, c := range confAppRaft.Orderer.EtcdRaft.Consenters {
 		srvC, err := tlsCA.NewServerCertKeyPair(c.Host)
 		Expect(err).NotTo(HaveOccurred())
@@ -497,7 +643,8 @@ func generateCertificates(confAppRaft *genesisconfig.Profile, tlsCA tlsgen.CA, c
 		c.ServerTlsCert = []byte(srvP)
 		c.ClientTlsCert = []byte(clnP)
 
-		certificats = append(certificats, srvC.Cert)
+		certificates = append(certificates, srvC.Cert)
 	}
-	return certificats
+
+	return certificates
 }

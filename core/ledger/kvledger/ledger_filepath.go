@@ -50,9 +50,9 @@ func BookkeeperDBPath(rootFSPath string) string {
 	return filepath.Join(rootFSPath, "bookkeeper")
 }
 
-// InProgressSnapshotsPath returns the dir path that is used temporarily during the genration of the snapshots for a ledger
-func InProgressSnapshotsPath(snapshotRootDir string) string {
-	return filepath.Join(snapshotRootDir, "underConstruction")
+// SnapshotsTempDirPath returns the dir path that is used temporarily during the genration or import of the snapshots for a ledger
+func SnapshotsTempDirPath(snapshotRootDir string) string {
+	return filepath.Join(snapshotRootDir, "temp")
 }
 
 // CompletedSnapshotsPath returns the absolute path that is used for persisting the snapshots
@@ -65,7 +65,7 @@ func SnapshotsDirForLedger(snapshotRootDir, ledgerID string) string {
 	return filepath.Join(CompletedSnapshotsPath(snapshotRootDir), ledgerID)
 }
 
-// SnapshotDirForLedgerHeight returns the absolute path for a particular snapshot for a ledger
-func SnapshotDirForLedgerHeight(snapshotRootDir, ledgerID string, snapshotHeight uint64) string {
-	return filepath.Join(SnapshotsDirForLedger(snapshotRootDir, ledgerID), strconv.FormatUint(snapshotHeight, 10))
+// SnapshotDirForLedgerBlockNum returns the absolute path for a particular snapshot for a ledger
+func SnapshotDirForLedgerBlockNum(snapshotRootDir, ledgerID string, blockNumber uint64) string {
+	return filepath.Join(SnapshotsDirForLedger(snapshotRootDir, ledgerID), strconv.FormatUint(blockNumber, 10))
 }

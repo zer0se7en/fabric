@@ -131,8 +131,10 @@ func New(conf *Config, s *grpc.Server, sa api.SecurityAdvisor,
 		MsgExpirationFactor:          conf.MsgExpirationFactor,
 		BootstrapPeers:               conf.BootstrapPeers,
 	}
-	g.disc = discovery.NewDiscoveryService(g.selfNetworkMember(), g.discAdapter, g.disSecAdap, g.disclosurePolicy,
-		discoveryConfig, anchorPeerTracker)
+	self := g.selfNetworkMember()
+	logger := util.GetLogger(util.DiscoveryLogger, self.InternalEndpoint)
+	g.disc = discovery.NewDiscoveryService(self, g.discAdapter, g.disSecAdap, g.disclosurePolicy,
+		discoveryConfig, anchorPeerTracker, logger)
 	g.logger.Infof("Creating gossip service with self membership of %s", g.selfNetworkMember())
 
 	g.certPuller = g.createCertStorePuller()
@@ -190,7 +192,7 @@ func (g *Node) JoinChan(joinMsg api.JoinChannelMessage, channelID common.Channel
 	// joinMsg is supposed to have been already verified
 	g.chanState.joinChannel(joinMsg, channelID, g.gossipMetrics.MembershipMetrics)
 
-	g.logger.Info("Joining gossip network of channel", string(channelID), "with", len(joinMsg.Members()), "organizations")
+	g.logger.Info("Joining gossip network of channel", channelID, "with", len(joinMsg.Members()), "organizations")
 	for _, org := range joinMsg.Members() {
 		g.learnAnchorPeers(string(channelID), org, joinMsg.AnchorPeersOf(org))
 	}
@@ -621,14 +623,14 @@ func (g *Node) SendByCriteria(msg *protoext.SignedGossipMessage, criteria SendCr
 	if len(criteria.Channel) > 0 {
 		gc := g.chanState.getGossipChannelByChainID(criteria.Channel)
 		if gc == nil {
-			return fmt.Errorf("Requested to Send for channel %s, but no such channel exists", string(criteria.Channel))
+			return fmt.Errorf("requested to Send for channel %s, but no such channel exists", criteria.Channel)
 		}
 		membership = gc.GetPeers()
 	}
 
 	peers2send := filter.SelectPeers(criteria.MaxPeers, membership, criteria.IsEligible)
 	if len(peers2send) < criteria.MinAck {
-		return fmt.Errorf("Requested to send to at least %d peers, but know only of %d suitable peers", criteria.MinAck, len(peers2send))
+		return fmt.Errorf("requested to send to at least %d peers, but know only of %d suitable peers", criteria.MinAck, len(peers2send))
 	}
 
 	results := g.comm.SendWithAck(msg, criteria.Timeout, criteria.MinAck, peers2send...)
@@ -740,7 +742,7 @@ func (g *Node) SelfChannelInfo(chain common.ChannelID) *protoext.SignedGossipMes
 func (g *Node) PeerFilter(channel common.ChannelID, messagePredicate api.SubChannelSelectionCriteria) (filter.RoutingFilter, error) {
 	gc := g.chanState.getGossipChannelByChainID(channel)
 	if gc == nil {
-		return nil, errors.Errorf("Channel %s doesn't exist", string(channel))
+		return nil, errors.Errorf("Channel %s doesn't exist", channel)
 	}
 	return gc.PeerFilter(messagePredicate), nil
 }

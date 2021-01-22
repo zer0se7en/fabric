@@ -68,6 +68,7 @@ type kvLedger struct {
 
 type lgrInitializer struct {
 	ledgerID                 string
+	initializingFromSnapshot bool
 	bootSnapshotMetadata     *snapshotMetadata
 	blockStore               *blkstorage.BlockStore
 	pvtdataStore             *pvtdatastorage.Store
@@ -141,14 +142,19 @@ func newKVLedger(initializer *lgrInitializer) (*kvLedger, error) {
 	}
 	l.isPvtstoreAheadOfBlkstore.Store(isAhead)
 
-	// TODO Move the function `GetChaincodeEventListener` to ledger interface and
-	// this functionality of registering for events to ledgermgmt package so that this
-	// is reused across other future ledger implementations
-	ccEventListener := initializer.stateDB.GetChaincodeEventListener()
-	logger.Debugf("Register state db for chaincode lifecycle events: %t", ccEventListener != nil)
-	if ccEventListener != nil {
-		cceventmgmt.GetMgr().Register(ledgerID, ccEventListener)
-		initializer.ccLifecycleEventProvider.RegisterListener(ledgerID, &ccEventListenerAdaptor{ccEventListener})
+	statedbIndexCreator := initializer.stateDB.GetChaincodeEventListener()
+	if statedbIndexCreator != nil {
+		logger.Debugf("Register state db for chaincode lifecycle events")
+		err := l.registerStateDBIndexCreatorForChaincodeLifecycleEvents(
+			statedbIndexCreator,
+			initializer.ccInfoProvider,
+			initializer.ccLifecycleEventProvider,
+			cceventmgmt.GetMgr(),
+			initializer.initializingFromSnapshot,
+		)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	//Recover both state DB and history DB if they are out of sync with block storage
@@ -167,6 +173,77 @@ func newKVLedger(initializer *lgrInitializer) (*kvLedger, error) {
 
 	l.stats = initializer.stats
 	return l, nil
+}
+
+func (l *kvLedger) registerStateDBIndexCreatorForChaincodeLifecycleEvents(
+	stateDBIndexCreator cceventmgmt.ChaincodeLifecycleEventListener,
+	deployedChaincodesInfoExtractor ledger.DeployedChaincodeInfoProvider,
+	chaincodesLifecycleEventsProvider ledger.ChaincodeLifecycleEventProvider,
+	legacyChaincodesLifecycleEventsProvider *cceventmgmt.Mgr,
+	bootstrappingFromSnapshot bool,
+) error {
+	if !bootstrappingFromSnapshot {
+		// regular opening of ledger
+		if err := chaincodesLifecycleEventsProvider.RegisterListener(
+			l.ledgerID, &ccEventListenerAdaptor{stateDBIndexCreator}, false); err != nil {
+			return err
+		}
+		legacyChaincodesLifecycleEventsProvider.Register(l.ledgerID, stateDBIndexCreator)
+		return nil
+	}
+
+	// opening of ledger after creating from a snapshot -
+	// it would have been better if we could explicitly retrieve the list of invocable chaincodes instead of
+	// passing the flag initializer.initializingFromSnapshot to the ccLifecycleEventProvider (which is essentially
+	// the _lifecycle cache) for directing ccLifecycleEventProvider to call us back. However, the lock that ensures
+	// the synchronization with the chaincode installer is maintained in the lifecycle cache and by design the lifecycle
+	// cache takes the responsibility of calling any listener under the lock
+	if err := chaincodesLifecycleEventsProvider.RegisterListener(
+		l.ledgerID, &ccEventListenerAdaptor{stateDBIndexCreator}, true); err != nil {
+		return errors.WithMessage(err, "error while creating statdb indexes after bootstrapping from snapshot")
+	}
+
+	legacyChaincodes, err := l.listLegacyChaincodesDefined(deployedChaincodesInfoExtractor)
+	if err != nil {
+		return errors.WithMessage(err, "error while creating statdb indexes after bootstrapping from snapshot")
+	}
+
+	if err := legacyChaincodesLifecycleEventsProvider.RegisterAndInvokeFor(
+		legacyChaincodes, l.ledgerID, stateDBIndexCreator); err != nil {
+		return errors.WithMessage(err, "error while creating statdb indexes after bootstrapping from snapshot")
+	}
+	return nil
+}
+
+func (l *kvLedger) listLegacyChaincodesDefined(
+	deployedChaincodesInfoExtractor ledger.DeployedChaincodeInfoProvider) (
+	[]*cceventmgmt.ChaincodeDefinition, error) {
+	qe, err := l.txmgr.NewQueryExecutor("")
+	if err != nil {
+		return nil, err
+	}
+	defer qe.Done()
+
+	definedChaincodes, err := deployedChaincodesInfoExtractor.AllChaincodesInfo(l.ledgerID, qe)
+	if err != nil {
+		return nil, err
+	}
+
+	legacyChaincodes := []*cceventmgmt.ChaincodeDefinition{}
+	for _, chaincodeInfo := range definedChaincodes {
+		if !chaincodeInfo.IsLegacy {
+			continue
+		}
+		legacyChaincodes = append(legacyChaincodes,
+			&cceventmgmt.ChaincodeDefinition{
+				Name:              chaincodeInfo.Name,
+				Version:           chaincodeInfo.Version,
+				Hash:              chaincodeInfo.Hash,
+				CollectionConfigs: chaincodeInfo.ExplicitCollectionConfigPkg,
+			},
+		)
+	}
+	return legacyChaincodes, nil
 }
 
 func (l *kvLedger) initTxMgr(initializer *txmgr.Initializer) error {
@@ -193,7 +270,7 @@ func (l *kvLedger) initTxMgr(initializer *txmgr.Initializer) error {
 
 func (l *kvLedger) initSnapshotMgr(initializer *lgrInitializer) error {
 	dbHandle := initializer.bookkeeperProvider.GetDBHandle(l.ledgerID, bookkeeping.SnapshotRequest)
-	bookkeeper, err := newSnapshotRequestBookkeeper(dbHandle)
+	bookkeeper, err := newSnapshotRequestBookkeeper(l.ledgerID, dbHandle)
 	if err != nil {
 		return err
 	}
@@ -209,10 +286,15 @@ func (l *kvLedger) initSnapshotMgr(initializer *lgrInitializer) error {
 	if err != nil {
 		return err
 	}
+	lastCommittedBlock := bcInfo.Height - 1
 
 	// start a goroutine to synchronize commit, snapshot generation, and snapshot submission/cancellation,
-	go l.processSnapshotMgmtEvents(bcInfo.Height)
-	return l.recoverSnapshot(bcInfo.Height)
+	go l.processSnapshotMgmtEvents(lastCommittedBlock)
+
+	if bcInfo.Height != 0 {
+		return l.regenrateMissedSnapshot(lastCommittedBlock)
+	}
+	return nil
 }
 
 func (l *kvLedger) lastPersistedCommitHash() ([]byte, error) {
@@ -225,7 +307,7 @@ func (l *kvLedger) lastPersistedCommitHash() ([]byte, error) {
 		return nil, nil
 	}
 
-	if l.bootSnapshotMetadata != nil && l.bootSnapshotMetadata.ChannelHeight == bcInfo.Height {
+	if l.bootSnapshotMetadata != nil && l.bootSnapshotMetadata.LastBlockNumber == bcInfo.Height-1 {
 		logger.Debugw(
 			"Ledger is starting first time after creation from a snapshot. Retrieveing last commit hash from boot snapshot metadata",
 			"ledger", l.ledgerID,
@@ -294,7 +376,7 @@ func (l *kvLedger) syncStateAndHistoryDBWithBlockstore() error {
 		}
 
 		if l.bootSnapshotMetadata != nil {
-			lastBlockInSnapshot := l.bootSnapshotMetadata.ChannelHeight - 1
+			lastBlockInSnapshot := l.bootSnapshotMetadata.LastBlockNumber
 			if nextRequiredBlock <= lastBlockInSnapshot {
 				return errors.Errorf(
 					"recovery for DB [%s] not possible. Ledger [%s] is created from a snapshot. Last block in snapshot = [%d], DB needs block [%d] onward",
@@ -402,6 +484,13 @@ func (l *kvLedger) recommitLostBlocks(firstBlockNum uint64, lastBlockNum uint64,
 	return nil
 }
 
+// TxIDExists returns true if the specified txID is already present in one of the already committed blocks
+func (l *kvLedger) TxIDExists(txID string) (bool, error) {
+	l.blockAPIsRWLock.RLock()
+	defer l.blockAPIsRWLock.RUnlock()
+	return l.blockStore.TxIDExists(txID)
+}
+
 // GetTransactionByID retrieves a transaction by id
 func (l *kvLedger) GetTransactionByID(txID string) (*peer.ProcessedTransaction, error) {
 	l.blockAPIsRWLock.RLock()
@@ -498,15 +587,15 @@ func (l *kvLedger) NewHistoryQueryExecutor() (ledger.HistoryQueryExecutor, error
 // After the block is committed, it sends a commitDone event.
 // Refer to processEvents function to understand how the channels and events work together to handle synchronization.
 func (l *kvLedger) CommitLegacy(pvtdataAndBlock *ledger.BlockAndPvtData, commitOpts *ledger.CommitOptions) error {
-	postCommitBlockHeight := pvtdataAndBlock.Block.Header.Number + 1
-	l.snapshotMgr.events <- &event{commitStart, postCommitBlockHeight}
+	blockNumber := pvtdataAndBlock.Block.Header.Number
+	l.snapshotMgr.events <- &event{commitStart, blockNumber}
 	<-l.snapshotMgr.commitProceed
 
 	if err := l.commit(pvtdataAndBlock, commitOpts); err != nil {
 		return err
 	}
 
-	l.snapshotMgr.events <- &event{commitDone, postCommitBlockHeight}
+	l.snapshotMgr.events <- &event{commitDone, blockNumber}
 	return nil
 }
 
@@ -738,11 +827,18 @@ func (l *kvLedger) GetConfigHistoryRetriever() (ledger.ConfigHistoryRetriever, e
 	return l.configHistoryRetriever, nil
 }
 
-func (l *kvLedger) CommitPvtDataOfOldBlocks(reconciledPvtdata []*ledger.ReconciledPvtdata) ([]*ledger.PvtdataHashMismatch, error) {
+func (l *kvLedger) CommitPvtDataOfOldBlocks(reconciledPvtdata []*ledger.ReconciledPvtdata, unreconciled ledger.MissingPvtDataInfo) ([]*ledger.PvtdataHashMismatch, error) {
 	logger.Debugf("[%s:] Comparing pvtData of [%d] old blocks against the hashes in transaction's rwset to find valid and invalid data",
 		l.ledgerID, len(reconciledPvtdata))
 
-	hashVerifiedPvtData, hashMismatches, err := constructValidAndInvalidPvtData(reconciledPvtdata, l.blockStore)
+	lastBlockInBootstrapSnapshot := uint64(0)
+	if l.bootSnapshotMetadata != nil {
+		lastBlockInBootstrapSnapshot = l.bootSnapshotMetadata.LastBlockNumber
+	}
+
+	hashVerifiedPvtData, hashMismatches, err := constructValidAndInvalidPvtData(
+		reconciledPvtdata, l.blockStore, l.pvtdataStore, lastBlockInBootstrapSnapshot,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -754,7 +850,7 @@ func (l *kvLedger) CommitPvtDataOfOldBlocks(reconciledPvtdata []*ledger.Reconcil
 
 	logger.Debugf("[%s:] Committing pvtData of [%d] old blocks to the pvtdatastore", l.ledgerID, len(reconciledPvtdata))
 
-	err = l.pvtdataStore.CommitPvtDataOfOldBlocks(hashVerifiedPvtData)
+	err = l.pvtdataStore.CommitPvtDataOfOldBlocks(hashVerifiedPvtData, unreconciled)
 	if err != nil {
 		return nil, err
 	}
@@ -764,7 +860,12 @@ func (l *kvLedger) CommitPvtDataOfOldBlocks(reconciledPvtdata []*ledger.Reconcil
 
 func (l *kvLedger) applyValidTxPvtDataOfOldBlocks(hashVerifiedPvtData map[uint64][]*ledger.TxPvtData) error {
 	logger.Debugf("[%s:] Filtering pvtData of invalidation transactions", l.ledgerID)
-	committedPvtData, err := filterPvtDataOfInvalidTx(hashVerifiedPvtData, l.blockStore)
+
+	lastBlockInBootstrapSnapshot := uint64(0)
+	if l.bootSnapshotMetadata != nil {
+		lastBlockInBootstrapSnapshot = l.bootSnapshotMetadata.LastBlockNumber
+	}
+	committedPvtData, err := filterPvtDataOfInvalidTx(hashVerifiedPvtData, l.blockStore, lastBlockInBootstrapSnapshot)
 	if err != nil {
 		return err
 	}
@@ -895,10 +996,17 @@ func (a *ccEventListenerAdaptor) ChaincodeDeployDone(succeeded bool) {
 	a.legacyEventListener.ChaincodeDeployDone(succeeded)
 }
 
-func filterPvtDataOfInvalidTx(hashVerifiedPvtData map[uint64][]*ledger.TxPvtData, blockStore *blkstorage.BlockStore) (map[uint64][]*ledger.TxPvtData, error) {
+func filterPvtDataOfInvalidTx(
+	hashVerifiedPvtData map[uint64][]*ledger.TxPvtData,
+	blockStore *blkstorage.BlockStore,
+	lastBlockInBootstrapSnapshot uint64,
+) (map[uint64][]*ledger.TxPvtData, error) {
 	committedPvtData := make(map[uint64][]*ledger.TxPvtData)
 	for blkNum, txsPvtData := range hashVerifiedPvtData {
-
+		if blkNum <= lastBlockInBootstrapSnapshot {
+			committedPvtData[blkNum] = txsPvtData
+			continue
+		}
 		// TODO: Instead of retrieving the whole block, we need to retrieve only
 		// the TxValidationFlags from the block metadata. For that, we would need
 		// to add a new index for the block metadata - FAB-15808

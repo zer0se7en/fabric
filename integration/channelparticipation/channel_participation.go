@@ -25,8 +25,8 @@ import (
 func Join(n *nwo.Network, o *nwo.Orderer, channel string, block *common.Block, expectedChannelInfo ChannelInfo) {
 	blockBytes, err := proto.Marshal(block)
 	Expect(err).NotTo(HaveOccurred())
-	url := fmt.Sprintf("https://127.0.0.1:%d/participation/v1/channels", n.OrdererPort(o, nwo.OperationsPort))
-	req := generateJoinRequest(url, channel, blockBytes)
+	url := fmt.Sprintf("https://127.0.0.1:%d/participation/v1/channels", n.OrdererPort(o, nwo.AdminPort))
+	req := GenerateJoinRequest(url, channel, blockBytes)
 	authClient, _ := nwo.OrdererOperationalClients(n, o)
 
 	body := doBody(authClient, req)
@@ -36,7 +36,7 @@ func Join(n *nwo.Network, o *nwo.Orderer, channel string, block *common.Block, e
 	Expect(*c).To(Equal(expectedChannelInfo))
 }
 
-func generateJoinRequest(url, channel string, blockBytes []byte) *http.Request {
+func GenerateJoinRequest(url, channel string, blockBytes []byte) *http.Request {
 	joinBody := new(bytes.Buffer)
 	writer := multipart.NewWriter(joinBody)
 	part, err := writer.CreateFormFile("config-block", fmt.Sprintf("%s.block", channel))
@@ -63,45 +63,75 @@ func doBody(client *http.Client, req *http.Request) []byte {
 	return bodyBytes
 }
 
-type channelList struct {
-	SystemChannel *channelInfoShort  `json:"systemChannel"`
-	Channels      []channelInfoShort `json:"channels"`
+type ChannelList struct {
+	SystemChannel *ChannelInfoShort  `json:"systemChannel"`
+	Channels      []ChannelInfoShort `json:"channels"`
 }
 
-type channelInfoShort struct {
+type ChannelInfoShort struct {
 	Name string `json:"name"`
 	URL  string `json:"url"`
 }
 
-func List(n *nwo.Network, o *nwo.Orderer, expectedChannels []string, systemChannel ...string) {
-	authClient, unauthClient := nwo.OrdererOperationalClients(n, o)
-	listChannelsURL := fmt.Sprintf("https://127.0.0.1:%d/participation/v1/channels", n.OrdererPort(o, nwo.OperationsPort))
+func List(n *nwo.Network, o *nwo.Orderer) ChannelList {
+	authClient, _ := nwo.OrdererOperationalClients(n, o)
+	listChannelsURL := fmt.Sprintf("https://127.0.0.1:%d/participation/v1/channels", n.OrdererPort(o, nwo.AdminPort))
 
 	body := getBody(authClient, listChannelsURL)()
-	list := &channelList{}
+	list := &ChannelList{}
 	err := json.Unmarshal([]byte(body), list)
 	Expect(err).NotTo(HaveOccurred())
 
-	Expect(*list).To(MatchFields(IgnoreExtras, Fields{
-		"Channels":      channelsMatcher(expectedChannels),
-		"SystemChannel": systemChannelMatcher(systemChannel...),
-	}))
-
-	resp, err := unauthClient.Get(listChannelsURL)
-	Expect(err).NotTo(HaveOccurred())
-	Expect(resp.StatusCode).To(Equal(http.StatusUnauthorized))
+	return *list
 }
 
 func getBody(client *http.Client, url string) func() string {
 	return func() string {
 		resp, err := client.Get(url)
 		Expect(err).NotTo(HaveOccurred())
-		Expect(resp.StatusCode).To(Equal(http.StatusOK))
 		bodyBytes, err := ioutil.ReadAll(resp.Body)
 		Expect(err).NotTo(HaveOccurred())
 		resp.Body.Close()
 		return string(bodyBytes)
 	}
+}
+
+type ChannelInfo struct {
+	Name              string `json:"name"`
+	URL               string `json:"url"`
+	Status            string `json:"status"`
+	ConsensusRelation string `json:"consensusRelation"`
+	Height            uint64 `json:"height"`
+}
+
+func ListOne(n *nwo.Network, o *nwo.Orderer, channel string) ChannelInfo {
+	authClient, _ := nwo.OrdererOperationalClients(n, o)
+	listChannelURL := fmt.Sprintf("https://127.0.0.1:%d/participation/v1/channels/%s", n.OrdererPort(o, nwo.AdminPort), channel)
+
+	body := getBody(authClient, listChannelURL)()
+	c := &ChannelInfo{}
+	err := json.Unmarshal([]byte(body), c)
+	Expect(err).NotTo(HaveOccurred())
+	return *c
+}
+
+func Remove(n *nwo.Network, o *nwo.Orderer, channel string) {
+	authClient, _ := nwo.OrdererOperationalClients(n, o)
+	url := fmt.Sprintf("https://127.0.0.1:%d/participation/v1/channels/%s", n.OrdererPort(o, nwo.AdminPort), channel)
+
+	req, err := http.NewRequest(http.MethodDelete, url, nil)
+	Expect(err).NotTo(HaveOccurred())
+
+	resp, err := authClient.Do(req)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(resp.StatusCode).To(Equal(http.StatusNoContent))
+}
+
+func ChannelListMatcher(list ChannelList, expectedChannels []string, systemChannel ...string) {
+	Expect(list).To(MatchFields(IgnoreExtras, Fields{
+		"Channels":      channelsMatcher(expectedChannels),
+		"SystemChannel": systemChannelMatcher(systemChannel...),
+	}))
 }
 
 func channelsMatcher(channels []string) types.GomegaMatcher {
@@ -127,35 +157,4 @@ func channelInfoShortMatcher(channel string) types.GomegaMatcher {
 		"Name": Equal(channel),
 		"URL":  Equal(fmt.Sprintf("/participation/v1/channels/%s", channel)),
 	})
-}
-
-type ChannelInfo struct {
-	Name            string `json:"name"`
-	URL             string `json:"url"`
-	Status          string `json:"status"`
-	ClusterRelation string `json:"clusterRelation"`
-	Height          uint64 `json:"height"`
-}
-
-func ListOne(n *nwo.Network, o *nwo.Orderer, expectedChannelInfo ChannelInfo) {
-	authClient, _ := nwo.OrdererOperationalClients(n, o)
-	listChannelURL := fmt.Sprintf("https://127.0.0.1:%d/%s", n.OrdererPort(o, nwo.OperationsPort), expectedChannelInfo.URL)
-
-	body := getBody(authClient, listChannelURL)()
-	c := &ChannelInfo{}
-	err := json.Unmarshal([]byte(body), c)
-	Expect(err).NotTo(HaveOccurred())
-	Expect(*c).To(Equal(expectedChannelInfo))
-}
-
-func Remove(n *nwo.Network, o *nwo.Orderer, channel string) {
-	authClient, _ := nwo.OrdererOperationalClients(n, o)
-	url := fmt.Sprintf("https://127.0.0.1:%d/participation/v1/channels/%s", n.OrdererPort(o, nwo.OperationsPort), channel)
-
-	req, err := http.NewRequest(http.MethodDelete, url, nil)
-	Expect(err).NotTo(HaveOccurred())
-
-	resp, err := authClient.Do(req)
-	Expect(err).NotTo(HaveOccurred())
-	Expect(resp.StatusCode).To(Equal(http.StatusNoContent))
 }

@@ -8,7 +8,6 @@ package follower_test
 
 import (
 	"fmt"
-	"github.com/stretchr/testify/assert"
 	"io/ioutil"
 	"os"
 	"path"
@@ -29,14 +28,9 @@ import (
 	"github.com/hyperledger/fabric/orderer/common/follower/mocks"
 	"github.com/hyperledger/fabric/orderer/common/localconfig"
 	"github.com/hyperledger/fabric/protoutil"
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/require"
 )
-
-//go:generate counterfeiter -o mocks/block_verifier.go --fake-name BlockVerifier . blockVerifier
-
-type blockVerifier interface {
-	cluster.BlockVerifier
-}
 
 //go:generate counterfeiter -o mocks/signer_serializer.go --fake-name SignerSerializer . signerSerializer
 
@@ -107,13 +101,13 @@ func TestBlockPullerFactory_BlockPuller(t *testing.T) {
 	t.Run("good", func(t *testing.T) {
 		joinBlockAppRaft := generateJoinBlock(t, tlsCA, channelID, 10)
 		require.NotNil(t, joinBlockAppRaft)
-		bp, err := factory.BlockPuller(joinBlockAppRaft)
+		bp, err := factory.BlockPuller(joinBlockAppRaft, make(chan struct{}))
 		require.NoError(t, err)
 		require.NotNil(t, bp)
 	})
 
 	t.Run("bad join block", func(t *testing.T) {
-		bp, err := factory.BlockPuller(&cb.Block{Header: &cb.BlockHeader{}})
+		bp, err := factory.BlockPuller(&cb.Block{Header: &cb.BlockHeader{}}, make(chan struct{}))
 		require.EqualError(t, err, "error extracting endpoints from config block: block data is nil")
 		require.Nil(t, bp)
 	})
@@ -123,12 +117,32 @@ func TestBlockPullerFactory_VerifyBlockSequence(t *testing.T) {
 	// replaces cluster.VerifyBlocks, count blocks
 	var numBlocks int32
 	altVerifyBlocks := func(blockBuff []*cb.Block, signatureVerifier cluster.BlockVerifier) error { // replaces cluster.VerifyBlocks, count invocations
-		assert.NotNil(t, signatureVerifier)
+		if len(blockBuff) == 0 {
+			return errors.New("buffer is empty")
+		}
+
+		require.NotNil(t, signatureVerifier)
 		atomic.StoreInt32(&numBlocks, int32(len(blockBuff)))
 		return nil
 	}
 
-	t.Run("skip genesis block", func(t *testing.T) {
+	t.Run("skip genesis block, alone", func(t *testing.T) {
+		setupBlockPullerTest(t)
+		atomic.StoreInt32(&numBlocks, 0)
+		creator, err := follower.NewBlockPullerCreator(channelID, testLogger, mockSigner, dialer, localconfig.Cluster{}, cryptoProv)
+		require.NotNil(t, creator)
+		require.NoError(t, err)
+		creator.ClusterVerifyBlocks = altVerifyBlocks
+		blocks := []*cb.Block{
+			generateJoinBlock(t, tlsCA, channelID, 0),
+		}
+
+		err = creator.VerifyBlockSequence(blocks, "")
+		require.NoError(t, err)
+		require.Equal(t, int32(0), atomic.LoadInt32(&numBlocks))
+	})
+
+	t.Run("skip genesis block as part of a slice", func(t *testing.T) {
 		setupBlockPullerTest(t)
 		atomic.StoreInt32(&numBlocks, 0)
 		creator, err := follower.NewBlockPullerCreator(channelID, testLogger, mockSigner, dialer, localconfig.Cluster{}, cryptoProv)
@@ -142,7 +156,7 @@ func TestBlockPullerFactory_VerifyBlockSequence(t *testing.T) {
 
 		err = creator.VerifyBlockSequence(blocks, "")
 		require.NoError(t, err)
-		assert.Equal(t, int32(2), atomic.LoadInt32(&numBlocks))
+		require.Equal(t, int32(2), atomic.LoadInt32(&numBlocks))
 	})
 
 	t.Run("verify all blocks in slice", func(t *testing.T) {
@@ -161,7 +175,7 @@ func TestBlockPullerFactory_VerifyBlockSequence(t *testing.T) {
 		creator.UpdateVerifierFromConfigBlock(generateJoinBlock(t, tlsCA, channelID, 0))
 		err = creator.VerifyBlockSequence(blocks, "")
 		require.NoError(t, err)
-		assert.Equal(t, int32(3), atomic.LoadInt32(&numBlocks))
+		require.Equal(t, int32(3), atomic.LoadInt32(&numBlocks))
 	})
 }
 

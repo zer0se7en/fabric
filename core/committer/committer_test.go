@@ -59,6 +59,12 @@ func (m *mockLedger) Close() {
 
 }
 
+// TxIDExists returns true if the specified txID is already present in one of the already committed blocks
+func (m *mockLedger) TxIDExists(txID string) (bool, error) {
+	args := m.Called(txID)
+	return args.Get(0).(bool), args.Error(1)
+}
+
 func (m *mockLedger) GetTransactionByID(txID string) (*peer.ProcessedTransaction, error) {
 	args := m.Called(txID)
 	return args.Get(0).(*peer.ProcessedTransaction), args.Error(1)
@@ -112,7 +118,7 @@ func (m *mockLedger) CommitLegacy(blockAndPvtdata *ledger2.BlockAndPvtData, comm
 	return args.Error(0)
 }
 
-func (m *mockLedger) CommitPvtDataOfOldBlocks(reconciledPvtdata []*ledger2.ReconciledPvtdata) ([]*ledger2.PvtdataHashMismatch, error) {
+func (m *mockLedger) CommitPvtDataOfOldBlocks(reconciledPvtdata []*ledger2.ReconciledPvtdata, unreconciled ledger2.MissingPvtDataInfo) ([]*ledger2.PvtdataHashMismatch, error) {
 	panic("implement me")
 }
 

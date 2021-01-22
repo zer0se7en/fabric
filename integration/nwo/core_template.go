@@ -85,7 +85,7 @@ peer:
     keepalive:
       minInterval: 60s
   tls:
-    enabled:  true
+    enabled: {{ .TLSEnabled }}
     clientAuthRequired: {{ .ClientAuthRequired }}
     cert:
       file: {{ .PeerLocalTLSDir Peer }}/server.crt
@@ -208,14 +208,15 @@ ledger:
       requestTimeout: 35s
       queryLimit: 10000
       maxBatchUpdateSize: 1000
-      warmIndexesAfterNBlocks: 1
   history:
     enableHistoryDatabase: true
+  pvtdataStore:
+    deprioritizedDataReconcilerInterval: 60m
 
 operations:
   listenAddress: 127.0.0.1:{{ .PeerPort Peer "Operations" }}
   tls:
-    enabled: true
+    enabled: {{ .TLSEnabled }}
     cert:
       file: {{ .PeerLocalTLSDir Peer }}/server.crt
     key:

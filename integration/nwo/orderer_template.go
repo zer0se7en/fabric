@@ -12,7 +12,7 @@ General:
   ListenAddress: 127.0.0.1
   ListenPort: {{ .OrdererPort Orderer "Listen" }}
   TLS:
-    Enabled: true
+    Enabled: {{ .TLSEnabled }}
     PrivateKey: {{ $w.OrdererLocalTLSDir Orderer }}/server.key
     Certificate: {{ $w.OrdererLocalTLSDir Orderer }}/server.crt
     RootCAs:
@@ -91,11 +91,11 @@ Debug:
 Consensus:
   WALDir: {{ .OrdererDir Orderer }}/etcdraft/wal
   SnapDir: {{ .OrdererDir Orderer }}/etcdraft/snapshot
-  EvictionSuspicion: 10s
+  EvictionSuspicion: 5s
 Operations:
   ListenAddress: 127.0.0.1:{{ .OrdererPort Orderer "Operations" }}
   TLS:
-    Enabled: true
+    Enabled: {{ .TLSEnabled }}
     PrivateKey: {{ $w.OrdererLocalTLSDir Orderer }}/server.key
     Certificate: {{ $w.OrdererLocalTLSDir Orderer }}/server.crt
     RootCAs:
@@ -115,6 +115,17 @@ Metrics:
     {{- end }}
     WriteInterval: 5s
     Prefix: {{ ReplaceAll (ToLower Orderer.ID) "." "_" }}
+Admin:
+  ListenAddress: 127.0.0.1:{{ .OrdererPort Orderer "Admin" }}
+  TLS:
+    Enabled: {{ .TLSEnabled }}
+    PrivateKey: {{ $w.OrdererLocalTLSDir Orderer }}/server.key
+    Certificate: {{ $w.OrdererLocalTLSDir Orderer }}/server.crt
+    RootCAs:
+    -  {{ $w.OrdererLocalTLSDir Orderer }}/ca.crt
+    ClientAuthRequired: true
+    ClientRootCAs:
+    -  {{ $w.OrdererLocalTLSDir Orderer }}/ca.crt
 {{- end }}
 ChannelParticipation:
   Enabled: {{ .Consensus.ChannelParticipationEnabled }}

@@ -250,8 +250,6 @@ func TestConfigerInvokeJoinChainWrongParams(t *testing.T) {
 }
 
 func TestConfigerInvokeJoinChainCorrectParams(t *testing.T) {
-	viper.Set("chaincode.executetimeout", "3s")
-
 	testDir, err := ioutil.TempDir("", "cscc_test")
 	require.NoError(t, err, "error in creating test dir")
 	defer os.RemoveAll(testDir)
@@ -263,76 +261,16 @@ func TestConfigerInvokeJoinChainCorrectParams(t *testing.T) {
 	ledgerMgr := ledgermgmt.NewLedgerMgr(ledgerInitializer)
 	defer ledgerMgr.Close()
 
-	peerEndpoint := "127.0.0.1:13611"
-
-	config := chaincode.GlobalConfig()
-	config.StartupTimeout = 30 * time.Second
-
+	listener, err := net.Listen("tcp", "127.0.0.1:")
+	require.NoError(t, err)
 	grpcServer := grpc.NewServer()
-	socket, err := net.Listen("tcp", peerEndpoint)
-	require.NoError(t, err)
 
-	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
-	require.NoError(t, err)
+	cscc := newPeerConfiger(t, ledgerMgr, grpcServer, listener.Addr().String())
 
-	signer := mgmt.GetLocalSigningIdentityOrPanic(cryptoProvider)
-
-	messageCryptoService := peergossip.NewMCS(&mocks.ChannelPolicyManagerGetter{}, signer, mgmt.NewDeserializersManager(cryptoProvider), cryptoProvider)
-	secAdv := peergossip.NewSecurityAdvisor(mgmt.NewDeserializersManager(cryptoProvider))
-	var defaultSecureDialOpts = func() []grpc.DialOption {
-		return []grpc.DialOption{grpc.WithInsecure()}
-	}
-	var defaultDeliverClientDialOpts []grpc.DialOption
-	defaultDeliverClientDialOpts = append(
-		defaultDeliverClientDialOpts,
-		grpc.WithBlock(),
-		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(comm.MaxRecvMsgSize), grpc.MaxCallSendMsgSize(comm.MaxSendMsgSize)),
-	)
-	defaultDeliverClientDialOpts = append(
-		defaultDeliverClientDialOpts,
-		comm.ClientKeepaliveOptions(comm.DefaultKeepaliveOptions)...,
-	)
-	gossipConfig, err := gossip.GlobalConfig(peerEndpoint, nil)
-	require.NoError(t, err)
-
-	gossipService, err := service.New(
-		signer,
-		gossipmetrics.NewGossipMetrics(&disabled.Provider{}),
-		peerEndpoint,
-		grpcServer,
-		messageCryptoService,
-		secAdv,
-		defaultSecureDialOpts,
-		nil,
-		nil,
-		gossipConfig,
-		&service.ServiceConfig{},
-		&privdata.PrivdataConfig{},
-		&deliverservice.DeliverServiceConfig{
-			ReConnectBackoffThreshold:   deliverservice.DefaultReConnectBackoffThreshold,
-			ReconnectTotalTimeThreshold: deliverservice.DefaultReConnectTotalTimeThreshold,
-		},
-	)
-	require.NoError(t, err)
-
-	go grpcServer.Serve(socket)
+	go grpcServer.Serve(listener)
 	defer grpcServer.Stop()
 
-	require.NoError(t, err)
-
-	// setup cscc instance
-	mockACLProvider := &mocks.ACLProvider{}
-	cscc := &PeerConfiger{
-		policyChecker: &mocks.PolicyChecker{},
-		aclProvider:   mockACLProvider,
-		peer: &peer.Peer{
-			StoreProvider:  &mocks.StoreProvider{},
-			GossipService:  gossipService,
-			LedgerMgr:      ledgerMgr,
-			CryptoProvider: cryptoProvider,
-		},
-		bccsp: cryptoProvider,
-	}
+	mockACLProvider := cscc.aclProvider.(*mocks.ACLProvider)
 	mockStub := &mocks.ChaincodeStub{}
 
 	// Successful path for JoinChain
@@ -426,6 +364,177 @@ func TestConfigerInvokeJoinChainCorrectParams(t *testing.T) {
 	}
 }
 
+func TestConfigerInvokeJoinChainBySnapshot(t *testing.T) {
+	testDir, err := ioutil.TempDir("", "cscc_test_bysnapshot")
+	require.NoError(t, err, "error in creating test dir")
+	defer os.RemoveAll(testDir)
+
+	ledgerInitializer := ledgermgmttest.NewInitializer(testDir)
+	ledgerInitializer.CustomTxProcessors = map[common.HeaderType]ledger.CustomTxProcessor{
+		common.HeaderType_CONFIG: &peer.ConfigTxProcessor{},
+	}
+	ledgerMgr := ledgermgmt.NewLedgerMgr(ledgerInitializer)
+	defer ledgerMgr.Close()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:")
+	require.NoError(t, err)
+	grpcServer := grpc.NewServer()
+
+	cscc := newPeerConfiger(t, ledgerMgr, grpcServer, listener.Addr().String())
+
+	go grpcServer.Serve(listener)
+	defer grpcServer.Stop()
+
+	channelID := "testjoinchainbysnapshot"
+	sProp := validSignedProposal()
+	sProp.Signature = sProp.ProposalBytes
+
+	// set mocked ACLProcider and Stub
+	mockACLProvider := cscc.aclProvider.(*mocks.ACLProvider)
+	mockStub := &mocks.ChaincodeStub{}
+
+	snapshotDir := ledgermgmttest.CreateSnapshotWithGenesisBlock(t, testDir, channelID, &peer.ConfigTxProcessor{})
+
+	// successful path
+	mockACLProvider.CheckACLReturns(nil)
+	mockStub.GetSignedProposalReturns(sProp, nil)
+	mockStub.GetArgsReturns([][]byte{[]byte("JoinChainBySnapshot"), []byte(snapshotDir)})
+	res := cscc.Invoke(mockStub)
+	require.Equal(t, int32(shim.OK), res.Status)
+
+	// wait until ledger creation is done
+	ledgerCreationDone := func() bool {
+		resp := cscc.joinBySnapshotStatus()
+		require.Equal(t, shim.OK, int(resp.Status))
+		status := &pb.JoinBySnapshotStatus{}
+		err := proto.Unmarshal(resp.Payload, status)
+		require.NoError(t, err)
+		return !status.InProgress
+	}
+	require.Eventually(t, ledgerCreationDone, time.Minute, time.Second)
+
+	// verify get channels
+	mockStub.GetArgsReturns([][]byte{[]byte(GetChannels)})
+	res = cscc.Invoke(mockStub)
+	require.Equal(t, int32(shim.OK), res.Status)
+
+	cqr := &pb.ChannelQueryResponse{}
+	require.NoError(t, proto.Unmarshal(res.Payload, cqr))
+	require.Equal(t, 1, len(cqr.GetChannels()))
+	require.Equal(t, channelID, cqr.GetChannels()[0].GetChannelId())
+
+	// verify ledger is created
+	lgr := cscc.peer.GetLedger(channelID)
+	require.NotNil(t, lgr)
+	bcInfo, err := lgr.GetBlockchainInfo()
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), bcInfo.Height)
+
+	// error path due to missing argument
+	mockStub.GetArgsReturns([][]byte{[]byte("JoinChainBySnapshot")})
+	res = cscc.Invoke(mockStub)
+	require.Equal(t, int32(shim.ERROR), res.Status)
+	require.Equal(t, "Incorrect number of arguments, 1", res.Message)
+
+	// error path due to invalid snapshot dir (ledger creation fails in this case)
+	mockStub.GetArgsReturns([][]byte{[]byte("JoinChainBySnapshot"), []byte("invalid-snapshot")})
+	res = cscc.Invoke(mockStub)
+	require.Equal(t, int32(shim.ERROR), res.Status)
+	require.Contains(t, res.Message, "no such file or directory")
+
+	// error path due to CheckACL error
+	mockACLProvider.CheckACLReturns(errors.New("Failed authorization"))
+	mockStub.GetArgsReturns([][]byte{[]byte("JoinChainBySnapshot"), []byte(snapshotDir)})
+	res = cscc.Invoke(mockStub)
+	require.Equal(t, int32(shim.ERROR), res.Status)
+	require.Contains(t, res.Message, "access denied for [JoinChainBySnapshot]")
+}
+
+func TestConfigerInvokeGetChannelConfig(t *testing.T) {
+	testDir, err := ioutil.TempDir("", "cscc_test_GetChannelConfig")
+	require.NoError(t, err)
+	defer os.RemoveAll(testDir)
+
+	ledgerInitializer := ledgermgmttest.NewInitializer(testDir)
+	ledgerInitializer.CustomTxProcessors = map[common.HeaderType]ledger.CustomTxProcessor{
+		common.HeaderType_CONFIG: &peer.ConfigTxProcessor{},
+	}
+	ledgerMgr := ledgermgmt.NewLedgerMgr(ledgerInitializer)
+	defer ledgerMgr.Close()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:")
+	require.NoError(t, err)
+	grpcServer := grpc.NewServer()
+
+	cscc := newPeerConfiger(t, ledgerMgr, grpcServer, listener.Addr().String())
+
+	go grpcServer.Serve(listener)
+	defer grpcServer.Stop()
+
+	block, err := configtxtest.MakeGenesisBlock("test-channel-id")
+	require.NoError(t, err)
+	require.NoError(t,
+		cscc.peer.CreateChannel("test-channel-id", block, cscc.deployedCCInfoProvider, cscc.legacyLifecycle, cscc.newLifecycle),
+	)
+
+	initMocks := func() (*mocks.ACLProvider, *mocks.ChaincodeStub) {
+		mockACLProvider := cscc.aclProvider.(*mocks.ACLProvider)
+		mockACLProvider.CheckACLReturns(nil)
+
+		mockStub := &mocks.ChaincodeStub{}
+		mockStub.GetSignedProposalReturns(validSignedProposal(), nil)
+		mockStub.GetArgsReturns([][]byte{[]byte("GetChannelConfig"), []byte("test-channel-id")})
+		return mockACLProvider, mockStub
+	}
+
+	t.Run("green-path", func(t *testing.T) {
+		_, mockStub := initMocks()
+		res := cscc.Invoke(mockStub)
+		require.Equal(t, int32(shim.OK), res.Status)
+
+		retrievedChannelConfig := &cb.Config{}
+		require.NoError(t, proto.Unmarshal(res.Payload, retrievedChannelConfig))
+		require.True(t,
+			proto.Equal(
+				channelConfigFromBlock(t, block),
+				retrievedChannelConfig,
+			),
+		)
+	})
+
+	t.Run("acl-error", func(t *testing.T) {
+		mockACLProvider, mockStub := initMocks()
+		mockACLProvider.CheckACLReturns(errors.New("auth error"))
+		res := cscc.Invoke(mockStub)
+		require.Equal(t, int32(shim.ERROR), res.Status)
+		require.Equal(t, res.Message, "access denied for [GetChannelConfig][test-channel-id]: auth error")
+	})
+
+	t.Run("missing-channel-name-error", func(t *testing.T) {
+		_, mockStub := initMocks()
+		mockStub.GetArgsReturns([][]byte{[]byte("GetChannelConfig")})
+		res := cscc.Invoke(mockStub)
+		require.Equal(t, int32(shim.ERROR), res.Status)
+		require.Equal(t, "Incorrect number of arguments, 1", res.Message)
+	})
+
+	t.Run("nil-channel-name-error", func(t *testing.T) {
+		_, mockStub := initMocks()
+		mockStub.GetArgsReturns([][]byte{[]byte("GetChannelConfig"), {}})
+		res := cscc.Invoke(mockStub)
+		require.Equal(t, int32(shim.ERROR), res.Status)
+		require.Equal(t, "empty channel name provided", res.Message)
+	})
+
+	t.Run("non-existing-channel-name-error", func(t *testing.T) {
+		_, mockStub := initMocks()
+		mockStub.GetArgsReturns([][]byte{[]byte("GetChannelConfig"), []byte("non-existing-channel")})
+		res := cscc.Invoke(mockStub)
+		require.Equal(t, int32(shim.ERROR), res.Status)
+		require.Equal(t, "unknown channel ID, non-existing-channel", res.Message)
+	})
+}
+
 func TestPeerConfiger_SubmittingOrdererGenesis(t *testing.T) {
 	conf := genesisconfig.Load(genesisconfig.SampleSingleMSPSoloProfile, configtest.GetDevConfigDir())
 	conf.Application = nil
@@ -457,6 +566,71 @@ func TestPeerConfiger_SubmittingOrdererGenesis(t *testing.T) {
 	require.Contains(t, res.Message, "missing Application configuration group")
 }
 
+func newPeerConfiger(t *testing.T, ledgerMgr *ledgermgmt.LedgerMgr, grpcServer *grpc.Server, peerEndpoint string) *PeerConfiger {
+	viper.Set("chaincode.executetimeout", "3s")
+
+	config := chaincode.GlobalConfig()
+	config.StartupTimeout = 30 * time.Second
+
+	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
+	require.NoError(t, err)
+
+	signer := mgmt.GetLocalSigningIdentityOrPanic(cryptoProvider)
+
+	messageCryptoService := peergossip.NewMCS(&mocks.ChannelPolicyManagerGetter{}, signer, mgmt.NewDeserializersManager(cryptoProvider), cryptoProvider)
+	secAdv := peergossip.NewSecurityAdvisor(mgmt.NewDeserializersManager(cryptoProvider))
+	var defaultSecureDialOpts = func() []grpc.DialOption {
+		return []grpc.DialOption{grpc.WithInsecure()}
+	}
+	var defaultDeliverClientDialOpts []grpc.DialOption
+	defaultDeliverClientDialOpts = append(
+		defaultDeliverClientDialOpts,
+		grpc.WithBlock(),
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(comm.MaxRecvMsgSize), grpc.MaxCallSendMsgSize(comm.MaxSendMsgSize)),
+	)
+	defaultDeliverClientDialOpts = append(
+		defaultDeliverClientDialOpts,
+		comm.ClientKeepaliveOptions(comm.DefaultKeepaliveOptions)...,
+	)
+	gossipConfig, err := gossip.GlobalConfig(peerEndpoint, nil)
+	require.NoError(t, err)
+
+	gossipService, err := service.New(
+		signer,
+		gossipmetrics.NewGossipMetrics(&disabled.Provider{}),
+		peerEndpoint,
+		grpcServer,
+		messageCryptoService,
+		secAdv,
+		defaultSecureDialOpts,
+		nil,
+		nil,
+		gossipConfig,
+		&service.ServiceConfig{},
+		&privdata.PrivdataConfig{},
+		&deliverservice.DeliverServiceConfig{
+			ReConnectBackoffThreshold:   deliverservice.DefaultReConnectBackoffThreshold,
+			ReconnectTotalTimeThreshold: deliverservice.DefaultReConnectTotalTimeThreshold,
+		},
+	)
+	require.NoError(t, err)
+
+	// setup cscc instance
+	mockACLProvider := &mocks.ACLProvider{}
+	cscc := &PeerConfiger{
+		policyChecker: &mocks.PolicyChecker{},
+		aclProvider:   mockACLProvider,
+		peer: &peer.Peer{
+			StoreProvider:  &mocks.StoreProvider{},
+			GossipService:  gossipService,
+			LedgerMgr:      ledgerMgr,
+			CryptoProvider: cryptoProvider,
+		},
+		bccsp: cryptoProvider,
+	}
+
+	return cscc
+}
 func mockConfigBlock() []byte {
 	var blockBytes []byte = nil
 	block, err := configtxtest.MakeGenesisBlock("mytestchannelid")
@@ -480,4 +654,13 @@ func validSignedProposal() *pb.SignedProposal {
 			}),
 		}),
 	}
+}
+
+func channelConfigFromBlock(t *testing.T, configBlock *cb.Block) *cb.Config {
+	envelopeConfig, err := protoutil.ExtractEnvelope(configBlock, 0)
+	require.NoError(t, err)
+	configEnv := &common.ConfigEnvelope{}
+	_, err = protoutil.UnmarshalEnvelopeOfType(envelopeConfig, common.HeaderType_CONFIG, configEnv)
+	require.NoError(t, err)
+	return configEnv.Config
 }

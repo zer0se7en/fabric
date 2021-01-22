@@ -87,9 +87,6 @@ type CouchDBConfig struct {
 	// MaxBatchUpdateSize is the maximum number of records to included in CouchDB
 	// bulk update operations.
 	MaxBatchUpdateSize int
-	// WarmIndexesAfterNBlocks is the number of blocks after which to warm any
-	// CouchDB indexes.
-	WarmIndexesAfterNBlocks int
 	// CreateGlobalChangesDB determines whether or not to create the "_global_changes"
 	// system database.
 	CreateGlobalChangesDB bool
@@ -113,6 +110,14 @@ type PrivateDataConfig struct {
 	// PurgeInterval is the number of blocks to wait until purging expired
 	// private data entries.
 	PurgeInterval int
+	// The missing data entries are classified into three categories:
+	// (1) eligible prioritized
+	// (2) eligible deprioritized
+	// (3) ineligible
+	// The reconciler would fetch the eligible prioritized missing data
+	// from other peers. A chance for eligible deprioritized missing data
+	// would be given after every DeprioritizedDataReconcilerInterval
+	DeprioritizedDataReconcilerInterval time.Duration
 }
 
 // HistoryDBConfig is a structure used to configure the transaction history database.
@@ -130,10 +135,11 @@ type SnapshotsConfig struct {
 type PeerLedgerProvider interface {
 	// CreateFromGenesisBlock creates a new ledger with the given genesis block.
 	// This function guarantees that the creation of ledger and committing the genesis block would an atomic action
-	// The chain id retrieved from the genesis block is treated as a ledger id
+	// The channel id retrieved from the genesis block is treated as a ledger id
 	CreateFromGenesisBlock(genesisBlock *common.Block) (PeerLedger, error)
-	// CreateFromSnapshot creates a new ledger from a snapshot
-	CreateFromSnapshot(snapshotDir string) (PeerLedger, error)
+	// CreateFromSnapshot creates a new ledger from a snapshot and returns the ledger and channel id.
+	// The channel id retrieved from snapshot metadata is treated as a ledger id
+	CreateFromSnapshot(snapshotDir string) (PeerLedger, string, error)
 	// Open opens an already created ledger
 	Open(ledgerID string) (PeerLedger, error)
 	// Exists tells whether the ledger with given id exists
@@ -148,6 +154,9 @@ type PeerLedgerProvider interface {
 // that tells apart valid transactions from invalid ones
 type PeerLedger interface {
 	commonledger.Ledger
+	// TxIDExists returns true if the specified txID is already present in one of the already committed blocks.
+	// This function returns error only if there is an underlying condition that prevents checking for the txID, such as an I/O error.
+	TxIDExists(txID string) (bool, error)
 	// GetTransactionByID retrieves a transaction by id
 	GetTransactionByID(txID string) (*peer.ProcessedTransaction, error)
 	// GetBlockByHash returns a block given it's hash
@@ -185,7 +194,7 @@ type PeerLedger interface {
 	// If hashes for some of the private data supplied in this function does not match
 	// the corresponding hash present in the block, the unmatched private data is not
 	// committed and instead the mismatch inforation is returned back
-	CommitPvtDataOfOldBlocks(reconciledPvtdata []*ReconciledPvtdata) ([]*PvtdataHashMismatch, error)
+	CommitPvtDataOfOldBlocks(reconciledPvtdata []*ReconciledPvtdata, unreconciled MissingPvtDataInfo) ([]*PvtdataHashMismatch, error)
 	// GetMissingPvtDataTracker return the MissingPvtDataTracker
 	GetMissingPvtDataTracker() (MissingPvtDataTracker, error)
 	// DoesPvtDataInfoExist returns true when
@@ -206,18 +215,6 @@ type PeerLedger interface {
 	CancelSnapshotRequest(height uint64) error
 	// PendingSnapshotRequests returns a list of heights for the pending (or under processing) snapshot requests.
 	PendingSnapshotRequests() ([]uint64, error)
-	// ListSnapshots returns the information for available snapshots.
-	// It returns a list of strings representing the following JSON object:
-	// type snapshotSignableMetadata struct {
-	//    ChannelName        string            `json:"channel_name"`
-	//    ChannelHeight      uint64            `json:"channel_height"`
-	//    LastBlockHashInHex string            `json:"last_block_hash"`
-	//    FilesAndHashes     map[string]string `json:"snapshot_files_raw_hashes"`
-	// }
-	ListSnapshots() ([]string, error)
-	// DeleteSnapshot deletes the snapshot files except the metadata file.
-	// It returns an error if no such a snapshot exists.
-	DeleteSnapshot(height uint64) error
 }
 
 // SimpleQueryExecutor encapsulates basic functions
@@ -573,25 +570,6 @@ func (missingPvtDataInfo MissingPvtDataInfo) Add(blkNum, txNum uint64, ns, coll 
 			Collection: coll})
 }
 
-// ErrCollectionConfigNotYetAvailable is an error which is returned from the function
-// ConfigHistoryRetriever.CollectionConfigAt() if the latest block number committed
-// is lower than the block number specified in the request.
-type ErrCollectionConfigNotYetAvailable struct {
-	MaxBlockNumCommitted uint64
-	Msg                  string
-}
-
-func (e *ErrCollectionConfigNotYetAvailable) Error() string {
-	return e.Msg
-}
-
-// NotFoundInIndexErr is used to indicate missing entry in the index
-type NotFoundInIndexErr string
-
-func (NotFoundInIndexErr) Error() string {
-	return "Entry not found in index"
-}
-
 // CollConfigNotDefinedError is returned whenever an operation
 // is requested on a collection whose config has not been defined
 type CollConfigNotDefinedError struct {
@@ -614,11 +592,11 @@ func (e *InvalidCollNameError) Error() string {
 
 // PvtdataHashMismatch is used when the hash of private write-set
 // does not match the corresponding hash present in the block
-// See function `PeerLedger.CommitPvtData` for the usages
+// or there is a mismatch with the boot-KV-hashes present in the
+// private block store if the legder is created from a snapshot
 type PvtdataHashMismatch struct {
 	BlockNum, TxNum       uint64
 	Namespace, Collection string
-	ExpectedHash          []byte
 }
 
 // DeployedChaincodeInfoProvider is a dependency that is used by ledger to build collection config history
@@ -672,6 +650,8 @@ type ChaincodeLifecycleDetails struct {
 type MembershipInfoProvider interface {
 	// AmMemberOf checks whether the current peer is a member of the given collection
 	AmMemberOf(channelName string, collectionPolicyConfig *peer.CollectionPolicyConfig) (bool, error)
+	// MyImplicitCollectionName returns the name of the implicit collection for the current peer
+	MyImplicitCollectionName() string
 }
 
 type HealthCheckRegistry interface {
@@ -707,8 +687,13 @@ func (cdef *ChaincodeDefinition) String() string {
 	return fmt.Sprintf("Name=%s, Version=%s, Hash=%#v", cdef.Name, cdef.Version, cdef.Hash)
 }
 
+// ChaincodeLifecycleEventProvider enables ledger to create indexes in the statedb
 type ChaincodeLifecycleEventProvider interface {
-	RegisterListener(channelID string, listener ChaincodeLifecycleEventListener)
+	// RegisterListener is used by ledger to receive a callback alongwith dbArtifacts when a chaincode becomes invocable on the peer
+	// In addition, if needsExistingChaincodesDefinitions is true, the provider calls back the listener with existing invocable chaincodes
+	// This parameter is used when we create a ledger from a snapshot so that we can create indexes for the existing invocable chaincodes
+	// already defined in the imported ledger data
+	RegisterListener(channelID string, listener ChaincodeLifecycleEventListener, needsExistingChaincodesDefinitions bool) error
 }
 
 // CustomTxProcessor allows to generate simulation results during commit time for custom transactions.

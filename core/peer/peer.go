@@ -148,6 +148,8 @@ func (flbs fileLedgerBlockStore) RetrieveBlocks(startBlockNumber uint64) (common
 	return flbs.GetBlocksIterator(startBlockNumber)
 }
 
+func (flbs fileLedgerBlockStore) Shutdown() {}
+
 // NewConfigSupport returns
 func NewConfigSupport(peer *Peer) cc.Manager {
 	return &configSupport{
@@ -224,8 +226,31 @@ func (p *Peer) CreateChannel(
 	return nil
 }
 
-// retrievePersistedChannelConfig retrieves the persisted channel config from statedb
-func retrievePersistedChannelConfig(ledger ledger.PeerLedger) (*common.Config, error) {
+// CreateChannelFromSnapshot creates a channel from the specified snapshot.
+func (p *Peer) CreateChannelFromSnapshot(
+	snapshotDir string,
+	deployedCCInfoProvider ledger.DeployedChaincodeInfoProvider,
+	legacyLifecycleValidation plugindispatcher.LifecycleResources,
+	newLifecycleValidation plugindispatcher.CollectionAndLifecycleResources,
+) error {
+	channelCallback := func(l ledger.PeerLedger, cid string) {
+		if err := p.createChannel(cid, l, deployedCCInfoProvider, legacyLifecycleValidation, newLifecycleValidation); err != nil {
+			logger.Errorf("error creating channel for %s", cid)
+			return
+		}
+		p.initChannel(cid)
+	}
+
+	err := p.LedgerMgr.CreateLedgerFromSnapshot(snapshotDir, channelCallback)
+	if err != nil {
+		return errors.WithMessagef(err, "cannot create ledger from snapshot %s", snapshotDir)
+	}
+
+	return nil
+}
+
+// RetrievePersistedChannelConfig retrieves the persisted channel config from statedb
+func RetrievePersistedChannelConfig(ledger ledger.PeerLedger) (*common.Config, error) {
 	qe, err := ledger.NewQueryExecutor()
 	if err != nil {
 		return nil, err
@@ -242,7 +267,7 @@ func (p *Peer) createChannel(
 	legacyLifecycleValidation plugindispatcher.LifecycleResources,
 	newLifecycleValidation plugindispatcher.CollectionAndLifecycleResources,
 ) error {
-	chanConf, err := retrievePersistedChannelConfig(l)
+	chanConf, err := RetrievePersistedChannelConfig(l)
 	if err != nil {
 		return err
 	}
@@ -453,6 +478,11 @@ func (p *Peer) GetPolicyManager(cid string) policies.Manager {
 		return c.Resources().PolicyManager()
 	}
 	return nil
+}
+
+// JoinBySnaphotStatus queries ledger mgr to get the status of joinbysnapshot
+func (p *Peer) JoinBySnaphotStatus() *pb.JoinBySnapshotStatus {
+	return p.LedgerMgr.JoinBySnapshotStatus()
 }
 
 // initChannel takes care to initialize channel after peer joined, for example deploys system CCs

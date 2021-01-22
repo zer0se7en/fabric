@@ -23,6 +23,11 @@ const (
 	Lifecycle_QueryChaincodeDefinitions          = "_lifecycle/QueryChaincodeDefinitions"
 	Lifecycle_CheckCommitReadiness               = "_lifecycle/CheckCommitReadiness"
 
+	// snapshot resources
+	Snapshot_submitrequest = "snapshot/submitrequest"
+	Snapshot_cancelrequest = "snapshot/cancelrequest"
+	Snapshot_listpending   = "snapshot/listpending"
+
 	//Lscc resources
 	Lscc_Install                   = "lscc/Install"
 	Lscc_Deploy                    = "lscc/Deploy"
@@ -42,9 +47,12 @@ const (
 	Qscc_GetBlockByTxID     = "qscc/GetBlockByTxID"
 
 	//Cscc resources
-	Cscc_JoinChain      = "cscc/JoinChain"
-	Cscc_GetConfigBlock = "cscc/GetConfigBlock"
-	Cscc_GetChannels    = "cscc/GetChannels"
+	Cscc_JoinChain            = "cscc/JoinChain"
+	Cscc_JoinChainBySnapshot  = "cscc/JoinChainBySnapshot"
+	Cscc_JoinBySnapshotStatus = "cscc/JoinBySnapshotStatus"
+	Cscc_GetConfigBlock       = "cscc/GetConfigBlock"
+	Cscc_GetChannelConfig     = "cscc/GetChannelConfig"
+	Cscc_GetChannels          = "cscc/GetChannels"
 
 	//Peer resources
 	Peer_Propose              = "peer/Propose"

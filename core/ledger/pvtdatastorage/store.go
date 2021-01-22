@@ -7,7 +7,6 @@ SPDX-License-Identifier: Apache-2.0
 package pvtdatastorage
 
 import (
-	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -17,11 +16,15 @@ import (
 	"github.com/hyperledger/fabric/common/flogging"
 	"github.com/hyperledger/fabric/common/ledger/util/leveldbhelper"
 	"github.com/hyperledger/fabric/core/ledger"
+	"github.com/hyperledger/fabric/core/ledger/confighistory"
 	"github.com/hyperledger/fabric/core/ledger/pvtdatapolicy"
+	"github.com/pkg/errors"
 	"github.com/willf/bitset"
 )
 
-var logger = flogging.MustGetLogger("pvtdatastorage")
+var (
+	logger = flogging.MustGetLogger("pvtdatastorage")
+)
 
 // Provider provides handle to specific 'Store' that in turn manages
 // private write sets for a ledger
@@ -51,8 +54,10 @@ type Store struct {
 
 	isEmpty            bool
 	lastCommittedBlock uint64
-	purgerLock         sync.Mutex
-	collElgProcSync    *collElgProcSync
+	bootsnapshotInfo   *bootsnapshotInfo
+
+	purgerLock      sync.Mutex
+	collElgProcSync *collElgProcSync
 	// After committing the pvtdata of old blocks,
 	// the `isLastUpdatedOldBlocksSet` is set to true.
 	// Once the stateDB is updated with these pvtdata,
@@ -63,6 +68,14 @@ type Store struct {
 	// in the stateDB needs to be updated before finishing the
 	// recovery operation.
 	isLastUpdatedOldBlocksSet bool
+
+	deprioritizedDataReconcilerInterval time.Duration
+	accessDeprioMissingDataAfter        time.Time
+}
+
+type bootsnapshotInfo struct {
+	createdFromSnapshot bool
+	lastBlockInSnapshot uint64
 }
 
 type blkTranNumKey []byte
@@ -94,13 +107,20 @@ type dataKey struct {
 
 type missingDataKey struct {
 	nsCollBlk
-	isEligible bool
+}
+
+type bootKVHashesKey struct {
+	blkNum uint64
+	txNum  uint64
+	ns     string
+	coll   string
 }
 
 type storeEntries struct {
-	dataEntries        []*dataEntry
-	expiryEntries      []*expiryEntry
-	missingDataEntries map[missingDataKey]*bitset.BitSet
+	dataEntries             []*dataEntry
+	expiryEntries           []*expiryEntry
+	elgMissingDataEntries   map[missingDataKey]*bitset.BitSet
+	inelgMissingDataEntries map[missingDataKey]*bitset.BitSet
 }
 
 // lastUpdatedOldBlocksList keeps the list of last updated blocks
@@ -122,15 +142,44 @@ func NewProvider(conf *PrivateDataConfig) (*Provider, error) {
 	}, nil
 }
 
+// SnapshotDataImporterFor returns an implementation of interface privacyenabledstate.SnapshotPvtdataHashesConsumer
+// The returned struct is expected to be registered for receiving the pvtdata hashes from snapshot and loads the data
+// into pvtdata store.
+func (p *Provider) SnapshotDataImporterFor(
+	ledgerID string,
+	lastBlockInSnapshot uint64,
+	membershipProvider ledger.MembershipInfoProvider,
+	configHistoryRetriever *confighistory.Retriever,
+	tempDirRoot string,
+) (*SnapshotDataImporter, error) {
+	db := p.dbProvider.GetDBHandle(ledgerID)
+	batch := db.NewUpdateBatch()
+	batch.Put(lastBlockInBootSnapshotKey, encodeLastBlockInBootSnapshotVal(lastBlockInSnapshot))
+	batch.Put(lastCommittedBlkkey, encodeLastCommittedBlockVal(lastBlockInSnapshot))
+	if err := db.WriteBatch(batch, true); err != nil {
+		return nil, errors.WithMessage(err, "error while writing snapshot info to db")
+	}
+
+	return newSnapshotDataImporter(
+		ledgerID,
+		p.dbProvider.GetDBHandle(ledgerID),
+		membershipProvider,
+		configHistoryRetriever,
+		tempDirRoot,
+	)
+}
+
 // OpenStore returns a handle to a store
 func (p *Provider) OpenStore(ledgerid string) (*Store, error) {
 	dbHandle := p.dbProvider.GetDBHandle(ledgerid)
 	s := &Store{
-		db:              dbHandle,
-		ledgerid:        ledgerid,
-		batchesInterval: p.pvtData.BatchesInterval,
-		maxBatchSize:    p.pvtData.MaxBatchSize,
-		purgeInterval:   uint64(p.pvtData.PurgeInterval),
+		db:                                  dbHandle,
+		ledgerid:                            ledgerid,
+		batchesInterval:                     p.pvtData.BatchesInterval,
+		maxBatchSize:                        p.pvtData.MaxBatchSize,
+		purgeInterval:                       uint64(p.pvtData.PurgeInterval),
+		deprioritizedDataReconcilerInterval: p.pvtData.DeprioritizedDataReconcilerInterval,
+		accessDeprioMissingDataAfter:        time.Now().Add(p.pvtData.DeprioritizedDataReconcilerInterval),
 		collElgProcSync: &collElgProcSync{
 			notification: make(chan bool, 1),
 			procComplete: make(chan bool, 1),
@@ -160,8 +209,11 @@ func (p *Provider) Drop(ledgerid string) error {
 
 func (s *Store) initState() error {
 	var err error
-	var blist lastUpdatedOldBlocksList
 	if s.isEmpty, s.lastCommittedBlock, err = s.getLastCommittedBlockNum(); err != nil {
+		return err
+	}
+
+	if s.bootsnapshotInfo, err = s.fetchBootSnapshotInfo(); err != nil {
 		return err
 	}
 
@@ -185,6 +237,7 @@ func (s *Store) initState() error {
 		s.lastCommittedBlock = committingBlockNum
 	}
 
+	var blist lastUpdatedOldBlocksList
 	if blist, err = s.getLastUpdatedOldBlocksList(); err != nil {
 		return err
 	}
@@ -207,12 +260,12 @@ func (s *Store) Init(btlPolicy pvtdatapolicy.BTLPolicy) {
 func (s *Store) Commit(blockNum uint64, pvtData []*ledger.TxPvtData, missingPvtData ledger.TxMissingPvtData) error {
 	expectedBlockNum := s.nextBlockNum()
 	if expectedBlockNum != blockNum {
-		return &ErrIllegalArgs{fmt.Sprintf("Expected block number=%d, received block number=%d", expectedBlockNum, blockNum)}
+		return errors.Errorf("expected block number=%d, received block number=%d", expectedBlockNum, blockNum)
 	}
 
 	batch := s.db.NewUpdateBatch()
 	var err error
-	var keyBytes, valBytes []byte
+	var key, val []byte
 
 	storeEntries, err := prepareStoreEntries(blockNum, pvtData, s.btlPolicy, missingPvtData)
 	if err != nil {
@@ -220,27 +273,37 @@ func (s *Store) Commit(blockNum uint64, pvtData []*ledger.TxPvtData, missingPvtD
 	}
 
 	for _, dataEntry := range storeEntries.dataEntries {
-		keyBytes = encodeDataKey(dataEntry.key)
-		if valBytes, err = encodeDataValue(dataEntry.value); err != nil {
+		key = encodeDataKey(dataEntry.key)
+		if val, err = encodeDataValue(dataEntry.value); err != nil {
 			return err
 		}
-		batch.Put(keyBytes, valBytes)
+		batch.Put(key, val)
 	}
 
 	for _, expiryEntry := range storeEntries.expiryEntries {
-		keyBytes = encodeExpiryKey(expiryEntry.key)
-		if valBytes, err = encodeExpiryValue(expiryEntry.value); err != nil {
+		key = encodeExpiryKey(expiryEntry.key)
+		if val, err = encodeExpiryValue(expiryEntry.value); err != nil {
 			return err
 		}
-		batch.Put(keyBytes, valBytes)
+		batch.Put(key, val)
 	}
 
-	for missingDataKey, missingDataValue := range storeEntries.missingDataEntries {
-		keyBytes = encodeMissingDataKey(&missingDataKey)
-		if valBytes, err = encodeMissingDataValue(missingDataValue); err != nil {
+	for missingDataKey, missingDataValue := range storeEntries.elgMissingDataEntries {
+		key = encodeElgPrioMissingDataKey(&missingDataKey)
+
+		if val, err = encodeMissingDataValue(missingDataValue); err != nil {
 			return err
 		}
-		batch.Put(keyBytes, valBytes)
+		batch.Put(key, val)
+	}
+
+	for missingDataKey, missingDataValue := range storeEntries.inelgMissingDataEntries {
+		key = encodeInelgMissingDataKey(&missingDataKey)
+
+		if val, err = encodeMissingDataValue(missingDataValue); err != nil {
+			return err
+		}
+		batch.Put(key, val)
 	}
 
 	committingBlockNum := s.nextBlockNum()
@@ -330,11 +393,11 @@ func (s *Store) ResetLastUpdatedOldBlocksList() error {
 func (s *Store) GetPvtDataByBlockNum(blockNum uint64, filter ledger.PvtNsCollFilter) ([]*ledger.TxPvtData, error) {
 	logger.Debugf("Get private data for block [%d], filter=%#v", blockNum, filter)
 	if s.isEmpty {
-		return nil, &ErrOutOfRange{"The store is empty"}
+		return nil, errors.New("the store is empty")
 	}
 	lastCommittedBlock := atomic.LoadUint64(&s.lastCommittedBlock)
 	if blockNum > lastCommittedBlock {
-		return nil, &ErrOutOfRange{fmt.Sprintf("Last committed block=%d, block requested=%d", lastCommittedBlock, blockNum)}
+		return nil, errors.Errorf("last committed block number [%d] smaller than the requested block number [%d]", lastCommittedBlock, blockNum)
 	}
 	startKey, endKey := getDataKeysForRangeScanByBlockNum(blockNum)
 	logger.Debugf("Querying private data storage for write sets using startKey=%#v, endKey=%#v", startKey, endKey)
@@ -403,16 +466,28 @@ func (s *Store) GetMissingPvtDataInfoForMostRecentBlocks(maxBlock int) (ledger.M
 		return nil, nil
 	}
 
+	if time.Now().After(s.accessDeprioMissingDataAfter) {
+		s.accessDeprioMissingDataAfter = time.Now().Add(s.deprioritizedDataReconcilerInterval)
+		logger.Debug("fetching missing pvtdata entries from the deprioritized list")
+		return s.getMissingData(elgDeprioritizedMissingDataGroup, maxBlock)
+	}
+
+	logger.Debug("fetching missing pvtdata entries from the prioritized list")
+	return s.getMissingData(elgPrioritizedMissingDataGroup, maxBlock)
+}
+
+func (s *Store) getMissingData(group []byte, maxBlock int) (ledger.MissingPvtDataInfo, error) {
 	missingPvtDataInfo := make(ledger.MissingPvtDataInfo)
 	numberOfBlockProcessed := 0
 	lastProcessedBlock := uint64(0)
 	isMaxBlockLimitReached := false
+
 	// as we are not acquiring a read lock, new blocks can get committed while we
 	// construct the MissingPvtDataInfo. As a result, lastCommittedBlock can get
 	// changed. To ensure consistency, we atomically load the lastCommittedBlock value
 	lastCommittedBlock := atomic.LoadUint64(&s.lastCommittedBlock)
 
-	startKey, endKey := createRangeScanKeysForEligibleMissingDataEntries(lastCommittedBlock)
+	startKey, endKey := createRangeScanKeysForElgMissingData(lastCommittedBlock, group)
 	dbItr, err := s.db.GetIterator(startKey, endKey)
 	if err != nil {
 		return nil, err
@@ -421,7 +496,7 @@ func (s *Store) GetMissingPvtDataInfoForMostRecentBlocks(maxBlock int) (ledger.M
 
 	for dbItr.Next() {
 		missingDataKeyBytes := dbItr.Key()
-		missingDataKey := decodeMissingDataKey(missingDataKeyBytes)
+		missingDataKey := decodeElgMissingDataKey(missingDataKeyBytes)
 
 		if isMaxBlockLimitReached && (missingDataKey.blkNum != lastProcessedBlock) {
 			// ensures that exactly maxBlock number
@@ -475,6 +550,35 @@ func (s *Store) GetMissingPvtDataInfoForMostRecentBlocks(maxBlock int) (ledger.M
 	return missingPvtDataInfo, nil
 }
 
+// FetchBootKVHashes returns the KVHashes from the data that was loaded from a snapshot at the time of
+// bootstrapping. This funciton returns an error if the supplied blkNum is greater than the last block
+// number in the booting snapshot
+func (s *Store) FetchBootKVHashes(blkNum, txNum uint64, ns, coll string) (map[string][]byte, error) {
+	if s.bootsnapshotInfo.createdFromSnapshot && blkNum > s.bootsnapshotInfo.lastBlockInSnapshot {
+		return nil, errors.New(
+			"unexpected call. Boot KV Hashes are persisted only for the data imported from snapshot",
+		)
+	}
+	encVal, err := s.db.Get(
+		encodeBootKVHashesKey(
+			&bootKVHashesKey{
+				blkNum: blkNum,
+				txNum:  txNum,
+				ns:     ns,
+				coll:   coll,
+			},
+		),
+	)
+	if err != nil || encVal == nil {
+		return nil, err
+	}
+	bootKVHashes, err := decodeBootKVHashesVal(encVal)
+	if err != nil {
+		return nil, err
+	}
+	return bootKVHashes.toMap(), nil
+}
+
 // ProcessCollsEligibilityEnabled notifies the store when the peer becomes eligible to receive data for an
 // existing collection. Parameter 'committingBlk' refers to the block number that contains the corresponding
 // collection upgrade transaction and the parameter 'nsCollMap' contains the collections for which the peer
@@ -512,26 +616,42 @@ func (s *Store) performPurgeIfScheduled(latestCommittedBlk uint64) {
 }
 
 func (s *Store) purgeExpiredData(minBlkNum, maxBlkNum uint64) error {
-	batch := s.db.NewUpdateBatch()
 	expiryEntries, err := s.retrieveExpiryEntries(minBlkNum, maxBlkNum)
 	if err != nil || len(expiryEntries) == 0 {
 		return err
 	}
+
+	batch := s.db.NewUpdateBatch()
 	for _, expiryEntry := range expiryEntries {
-		// this encoding could have been saved if the function retrieveExpiryEntries also returns the encoded expiry keys.
-		// However, keeping it for better readability
 		batch.Delete(encodeExpiryKey(expiryEntry.key))
-		dataKeys, missingDataKeys := deriveKeys(expiryEntry)
+		dataKeys, missingDataKeys, bootKVHashesKeys := deriveKeys(expiryEntry)
+
 		for _, dataKey := range dataKeys {
 			batch.Delete(encodeDataKey(dataKey))
 		}
+
 		for _, missingDataKey := range missingDataKeys {
-			batch.Delete(encodeMissingDataKey(missingDataKey))
+			batch.Delete(
+				encodeElgPrioMissingDataKey(missingDataKey),
+			)
+			batch.Delete(
+				encodeElgDeprioMissingDataKey(missingDataKey),
+			)
+			batch.Delete(
+				encodeInelgMissingDataKey(missingDataKey),
+			)
 		}
+
+		for _, bootKVHashesKey := range bootKVHashesKeys {
+			batch.Delete(encodeBootKVHashesKey(bootKVHashesKey))
+		}
+
 		if err := s.db.WriteBatch(batch, false); err != nil {
 			return err
 		}
+		batch.Reset()
 	}
+
 	logger.Infof("[%s] - [%d] Entries purged from private data storage till block number [%d]", s.ledgerid, len(expiryEntries), maxBlkNum)
 	return nil
 }
@@ -606,7 +726,7 @@ func (s *Store) processCollElgEvents() error {
 			var coll string
 			for _, coll = range colls.Entries {
 				logger.Infof("Converting missing data entries from ineligible to eligible for [ns=%s, coll=%s]", ns, coll)
-				startKey, endKey := createRangeScanKeysForIneligibleMissingData(blkNum, ns, coll)
+				startKey, endKey := createRangeScanKeysForInelgMissingData(blkNum, ns, coll)
 				collItr, err := s.db.GetIterator(startKey, endKey)
 				if err != nil {
 					return err
@@ -615,15 +735,19 @@ func (s *Store) processCollElgEvents() error {
 
 				for collItr.Next() { // each entry
 					originalKey, originalVal := collItr.Key(), collItr.Value()
-					modifiedKey := decodeMissingDataKey(originalKey)
-					modifiedKey.isEligible = true
+					modifiedKey := decodeInelgMissingDataKey(originalKey)
 					batch.Delete(originalKey)
 					copyVal := make([]byte, len(originalVal))
 					copy(copyVal, originalVal)
-					batch.Put(encodeMissingDataKey(modifiedKey), copyVal)
+					batch.Put(
+						encodeElgPrioMissingDataKey(modifiedKey),
+						copyVal,
+					)
 					collEntriesConverted++
 					if batch.Len() > s.maxBatchSize {
-						s.db.WriteBatch(batch, true)
+						if err := s.db.WriteBatch(batch, true); err != nil {
+							return err
+						}
 						batch.Reset()
 						sleepTime := time.Duration(s.batchesInterval)
 						logger.Infof("Going to sleep for %d milliseconds between batches. Entries for [ns=%s, coll=%s] converted so far = %d",
@@ -642,7 +766,9 @@ func (s *Store) processCollElgEvents() error {
 		batch.Delete(collElgKey) // delete the collection eligibility event key as well
 	} // event loop
 
-	s.db.WriteBatch(batch, true)
+	if err := s.db.WriteBatch(batch, true); err != nil {
+		return err
+	}
 	logger.Debugf("Converted [%d] ineligible missing data entries to eligible", totalEntriesConverted)
 	return nil
 }
@@ -683,6 +809,26 @@ func (s *Store) getLastCommittedBlockNum() (bool, uint64, error) {
 	return false, decodeLastCommittedBlockVal(v), nil
 }
 
+func (s *Store) fetchBootSnapshotInfo() (*bootsnapshotInfo, error) {
+	v, err := s.db.Get(lastBlockInBootSnapshotKey)
+	if err != nil {
+		return nil, err
+	}
+	if v == nil {
+		return &bootsnapshotInfo{}, nil
+	}
+
+	lastBlkInSnapshot, err := decodeLastBlockInBootSnapshotVal(v)
+	if err != nil {
+		return nil, err
+	}
+
+	return &bootsnapshotInfo{
+		createdFromSnapshot: true,
+		lastBlockInSnapshot: lastBlkInSnapshot,
+	}, nil
+}
+
 type collElgProcSync struct {
 	notification, procComplete chan bool
 }
@@ -709,55 +855,4 @@ func (c *collElgProcSync) done() {
 
 func (c *collElgProcSync) waitForDone() {
 	<-c.procComplete
-}
-
-func (s *Store) getBitmapOfMissingDataKey(missingDataKey *missingDataKey) (*bitset.BitSet, error) {
-	var v []byte
-	var err error
-	if v, err = s.db.Get(encodeMissingDataKey(missingDataKey)); err != nil {
-		return nil, err
-	}
-	if v == nil {
-		return nil, nil
-	}
-	return decodeMissingDataValue(v)
-}
-
-func (s *Store) getExpiryDataOfExpiryKey(expiryKey *expiryKey) (*ExpiryData, error) {
-	var v []byte
-	var err error
-	if v, err = s.db.Get(encodeExpiryKey(expiryKey)); err != nil {
-		return nil, err
-	}
-	if v == nil {
-		return nil, nil
-	}
-	return decodeExpiryValue(v)
-}
-
-// ErrIllegalCall is to be thrown by a store impl if the store does not expect a call to Prepare/Commit/Rollback/InitLastCommittedBlock
-type ErrIllegalCall struct {
-	msg string
-}
-
-func (err *ErrIllegalCall) Error() string {
-	return err.msg
-}
-
-// ErrIllegalArgs is to be thrown by a store impl if the args passed are not allowed
-type ErrIllegalArgs struct {
-	msg string
-}
-
-func (err *ErrIllegalArgs) Error() string {
-	return err.msg
-}
-
-// ErrOutOfRange is to be thrown for the request for the data that is not yet committed
-type ErrOutOfRange struct {
-	msg string
-}
-
-func (err *ErrOutOfRange) Error() string {
-	return err.msg
 }

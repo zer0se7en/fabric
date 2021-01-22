@@ -28,6 +28,7 @@ type FileLedgerBlockStore interface {
 	AddBlock(block *cb.Block) error
 	GetBlockchainInfo() (*cb.BlockchainInfo, error)
 	RetrieveBlocks(startBlockNumber uint64) (ledger.ResultsIterator, error)
+	Shutdown()
 }
 
 // NewFileLedger creates a new FileLedger for interaction with the ledger
@@ -74,6 +75,9 @@ func (fl *FileLedger) Iterator(startPosition *ab.SeekPosition) (blockledger.Iter
 			logger.Panic(err)
 		}
 		newestBlockNumber := info.Height - 1
+		if info.BootstrappingSnapshotInfo != nil && newestBlockNumber == info.BootstrappingSnapshotInfo.LastBlockInSnapshot {
+			newestBlockNumber = info.Height
+		}
 		startingBlockNumber = newestBlockNumber
 	case *ab.SeekPosition_Specified:
 		startingBlockNumber = start.Specified.Number
@@ -81,6 +85,8 @@ func (fl *FileLedger) Iterator(startPosition *ab.SeekPosition) (blockledger.Iter
 		if startingBlockNumber > height {
 			return &blockledger.NotFoundErrorIterator{}, 0
 		}
+	case *ab.SeekPosition_NextCommit:
+		startingBlockNumber = fl.Height()
 	default:
 		return &blockledger.NotFoundErrorIterator{}, 0
 	}

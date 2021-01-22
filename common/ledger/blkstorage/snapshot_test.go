@@ -94,6 +94,18 @@ func TestImportFromSnapshot(t *testing.T) {
 			err := originalBlockStore.AddBlock(b)
 			require.NoError(t, err)
 		}
+
+		// verify blockchain info for original store (created by genesisblock)
+		lastBlock := blocksBeforeSnapshot[len(blocksBeforeSnapshot)-1]
+		prevBlock := blocksBeforeSnapshot[len(blocksBeforeSnapshot)-2]
+		bcInfo, err := originalBlockStore.GetBlockchainInfo()
+		require.NoError(t, err)
+		require.Equal(t, &common.BlockchainInfo{
+			Height:            uint64(len(blocksBeforeSnapshot)),
+			CurrentBlockHash:  protoutil.BlockHeaderHash(lastBlock.Header),
+			PreviousBlockHash: protoutil.BlockHeaderHash(prevBlock.Header),
+		}, bcInfo)
+
 		_, err = originalBlockStore.ExportTxIds(snapshotDir, testNewHashFunc)
 		require.NoError(t, err)
 		lastBlockInSnapshot := blocksBeforeSnapshot[len(blocksBeforeSnapshot)-1]
@@ -139,6 +151,9 @@ func TestImportFromSnapshot(t *testing.T) {
 				Height:            snapshotInfo.LastBlockNum + 1,
 				CurrentBlockHash:  snapshotInfo.LastBlockHash,
 				PreviousBlockHash: snapshotInfo.PreviousBlockHash,
+				BootstrappingSnapshotInfo: &common.BootstrappingSnapshotInfo{
+					LastBlockInSnapshot: snapshotInfo.LastBlockNum,
+				},
 			},
 			blocksDetailsBeforeSnapshot,
 			blocksBeforeSnapshot,
@@ -162,6 +177,9 @@ func TestImportFromSnapshot(t *testing.T) {
 			Height:            finalBlock.Header.Number + 1,
 			CurrentBlockHash:  protoutil.BlockHeaderHash(finalBlock.Header),
 			PreviousBlockHash: finalBlock.Header.PreviousHash,
+			BootstrappingSnapshotInfo: &common.BootstrappingSnapshotInfo{
+				LastBlockInSnapshot: snapshotInfo.LastBlockNum,
+			},
 		}
 		verifyQueriesOnBlocksPriorToSnapshot(t,
 			bootstrappedBlockStore,
@@ -189,6 +207,9 @@ func TestImportFromSnapshot(t *testing.T) {
 				Height:            snapshotInfo.LastBlockNum + 1,
 				CurrentBlockHash:  snapshotInfo.LastBlockHash,
 				PreviousBlockHash: snapshotInfo.PreviousBlockHash,
+				BootstrappingSnapshotInfo: &common.BootstrappingSnapshotInfo{
+					LastBlockInSnapshot: snapshotInfo.LastBlockNum,
+				},
 			},
 			blocksDetailsBeforeSnapshot,
 			blocksBeforeSnapshot,
@@ -204,6 +225,9 @@ func TestImportFromSnapshot(t *testing.T) {
 			Height:            finalBlock.Header.Number + 1,
 			CurrentBlockHash:  protoutil.BlockHeaderHash(finalBlock.Header),
 			PreviousBlockHash: finalBlock.Header.PreviousHash,
+			BootstrappingSnapshotInfo: &common.BootstrappingSnapshotInfo{
+				LastBlockInSnapshot: snapshotInfo.LastBlockNum,
+			},
 		}
 		verifyQueriesOnBlocksAddedAfterBootstrapping(t,
 			bootstrappedBlockStore,
@@ -261,7 +285,7 @@ func TestImportFromSnapshot(t *testing.T) {
 
 			// before, we test for index sync-up, verify that the last set of blocks not indexed in the original index
 			_, err := blkfileMgr.retrieveBlockByNumber(block.Header.Number)
-			require.Exactly(t, ErrNotFoundInIndex, err)
+			require.EqualError(t, err, fmt.Sprintf("no such block number [%d] in index", block.Header.Number))
 
 			// close and open should be able to sync-up the index
 			closeBlockStore()
@@ -275,6 +299,9 @@ func TestImportFromSnapshot(t *testing.T) {
 					Height:            finalBlock.Header.Number + 1,
 					CurrentBlockHash:  protoutil.BlockHeaderHash(finalBlock.Header),
 					PreviousBlockHash: finalBlock.Header.PreviousHash,
+					BootstrappingSnapshotInfo: &common.BootstrappingSnapshotInfo{
+						LastBlockInSnapshot: snapshotInfo.LastBlockNum,
+					},
 				},
 				blockDetails,
 				blocks,
@@ -446,7 +473,7 @@ func verifyQueriesOnBlocksPriorToSnapshot(
 		require.EqualError(t, err, expectedErrStr)
 
 		_, err = bootstrappedBlockStore.RetrieveBlockByHash(blockHash)
-		require.Equal(t, ErrNotFoundInIndex, err)
+		require.EqualError(t, err, fmt.Sprintf("no such block hash [%x] in index", blockHash))
 	}
 
 	bootstrappingSnapshotHeight := uint64(len(blocksDetailsBeforeSnapshot))
@@ -464,6 +491,10 @@ func verifyQueriesOnBlocksPriorToSnapshot(
 
 			_, err = bootstrappedBlockStore.RetrieveTxValidationCodeByTxID(txID)
 			require.EqualError(t, err, expectedErrorStr)
+
+			exists, err := bootstrappedBlockStore.TxIDExists(txID)
+			require.NoError(t, err)
+			require.True(t, exists)
 		}
 	}
 }
@@ -513,6 +544,10 @@ func verifyQueriesOnBlocksAddedAfterBootstrapping(t *testing.T,
 			expectedTxEnv, err := protoutil.GetEnvelopeFromBlock(block.Data.Data[j])
 			require.NoError(t, err)
 			require.Equal(t, expectedTxEnv, retrievedTxEnv)
+
+			exists, err := bootstrappedBlockStore.TxIDExists(txID)
+			require.NoError(t, err)
+			require.True(t, exists)
 		}
 
 		for j, validationCode := range d.validationCodes {

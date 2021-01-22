@@ -40,7 +40,8 @@ func TestNoItemsToReconcile(t *testing.T) {
 	fetcher.On("FetchReconciledItems", mock.Anything).Return(nil, errors.New("this function shouldn't be called"))
 
 	r := &Reconciler{
-		channel:                "",
+		channel:                "mychannel",
+		logger:                 logger.With("channel", "mychannel"),
 		metrics:                metrics.NewGossipMetrics(&disabled.Provider{}).PrivdataMetrics,
 		ReconcileSleepInterval: time.Minute,
 		ReconcileBatchSize:     1,
@@ -81,7 +82,8 @@ func TestNotReconcilingWhenCollectionConfigNotAvailable(t *testing.T) {
 	}).Return(nil, errors.New("called with no digests"))
 
 	r := &Reconciler{
-		channel:                "",
+		channel:                "mychannel",
+		logger:                 logger.With("channel", "mychannel"),
 		metrics:                metrics.NewGossipMetrics(&disabled.Provider{}).PrivdataMetrics,
 		ReconcileSleepInterval: time.Minute,
 		ReconcileBatchSize:     1,
@@ -104,6 +106,10 @@ func TestReconciliationHappyPathWithoutScheduler(t *testing.T) {
 	missingInfo := ledger.MissingPvtDataInfo{
 		3: map[uint64][]*ledger.MissingCollectionPvtDataInfo{
 			1: {{Collection: "col1", Namespace: "ns1"}},
+		},
+		4: map[uint64][]*ledger.MissingCollectionPvtDataInfo{
+			4: {{Collection: "col1", Namespace: "ns1"}},
+			5: {{Collection: "col1", Namespace: "ns1"}},
 		},
 	}
 
@@ -131,8 +137,13 @@ func TestReconciliationHappyPathWithoutScheduler(t *testing.T) {
 	result := &privdatacommon.FetchedPvtDataContainer{}
 	fetcher.On("FetchReconciledItems", mock.Anything).Run(func(args mock.Arguments) {
 		var dig2CollectionConfig = args.Get(0).(privdatacommon.Dig2CollectionConfig)
-		require.Equal(t, 1, len(dig2CollectionConfig))
+		require.Equal(t, 3, len(dig2CollectionConfig))
 		for digest := range dig2CollectionConfig {
+			if digest.BlockSeq != 3 {
+				// fetch private data only for block 3. Assume that the other
+				// block's private data could not be fetched
+				continue
+			}
 			hash := util2.ComputeSHA256([]byte("rws-pre-image"))
 			element := &gossip2.PvtDataElement{
 				Digest: &gossip2.PvtDataDigest{
@@ -148,11 +159,19 @@ func TestReconciliationHappyPathWithoutScheduler(t *testing.T) {
 		}
 	}).Return(result, nil)
 
+	expectedUnreconciledMissingData := ledger.MissingPvtDataInfo{
+		4: map[uint64][]*ledger.MissingCollectionPvtDataInfo{
+			4: {{Collection: "col1", Namespace: "ns1"}},
+			5: {{Collection: "col1", Namespace: "ns1"}},
+		},
+	}
+
 	var commitPvtDataOfOldBlocksHappened bool
 	var blockNum, seqInBlock uint64
 	blockNum = 3
 	seqInBlock = 1
-	committer.On("CommitPvtDataOfOldBlocks", mock.Anything).Run(func(args mock.Arguments) {
+	committer.On("CommitPvtDataOfOldBlocks", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
+		require.Len(t, args, 2)
 		var reconciledPvtdata = args.Get(0).([]*ledger.ReconciledPvtdata)
 		require.Equal(t, 1, len(reconciledPvtdata))
 		require.Equal(t, blockNum, reconciledPvtdata[0].BlockNum)
@@ -160,6 +179,9 @@ func TestReconciliationHappyPathWithoutScheduler(t *testing.T) {
 		require.Equal(t, "ns1", reconciledPvtdata[0].WriteSets[1].WriteSet.NsPvtRwset[0].Namespace)
 		require.Equal(t, "col1", reconciledPvtdata[0].WriteSets[1].WriteSet.NsPvtRwset[0].CollectionPvtRwset[0].CollectionName)
 		commitPvtDataOfOldBlocksHappened = true
+
+		var unreconciledPvtdata = args.Get(1).(ledger.MissingPvtDataInfo)
+		require.Equal(t, expectedUnreconciledMissingData, unreconciledPvtdata)
 	}).Return([]*ledger.PvtdataHashMismatch{}, nil)
 
 	testMetricProvider := gmetricsmocks.TestUtilConstructMetricProvider()
@@ -167,6 +189,7 @@ func TestReconciliationHappyPathWithoutScheduler(t *testing.T) {
 
 	r := &Reconciler{
 		channel:                "mychannel",
+		logger:                 logger.With("channel", "mychannel"),
 		metrics:                metrics,
 		ReconcileSleepInterval: time.Minute,
 		ReconcileBatchSize:     1,
@@ -244,7 +267,7 @@ func TestReconciliationHappyPathWithScheduler(t *testing.T) {
 	var blockNum, seqInBlock uint64
 	blockNum = 3
 	seqInBlock = 1
-	committer.On("CommitPvtDataOfOldBlocks", mock.Anything).Run(func(args mock.Arguments) {
+	committer.On("CommitPvtDataOfOldBlocks", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 		var reconciledPvtdata = args.Get(0).([]*ledger.ReconciledPvtdata)
 		require.Equal(t, 1, len(reconciledPvtdata))
 		require.Equal(t, blockNum, reconciledPvtdata[0].BlockNum)
@@ -252,6 +275,8 @@ func TestReconciliationHappyPathWithScheduler(t *testing.T) {
 		require.Equal(t, "ns1", reconciledPvtdata[0].WriteSets[1].WriteSet.NsPvtRwset[0].Namespace)
 		require.Equal(t, "col1", reconciledPvtdata[0].WriteSets[1].WriteSet.NsPvtRwset[0].CollectionPvtRwset[0].CollectionName)
 		commitPvtDataOfOldBlocksHappened = true
+
+		require.Nil(t, args.Get(1))
 		wg.Done()
 	}).Return([]*ledger.PvtdataHashMismatch{}, nil)
 
@@ -365,11 +390,13 @@ func TestReconciliationPullingMissingPrivateDataAtOnePass(t *testing.T) {
 
 	var commitPvtDataOfOldBlocksHappened bool
 	pvtDataStore := make([][]*ledger.ReconciledPvtdata, 0)
-	committer.On("CommitPvtDataOfOldBlocks", mock.Anything).Run(func(args mock.Arguments) {
+	committer.On("CommitPvtDataOfOldBlocks", mock.Anything, mock.Anything).Run(func(args mock.Arguments) {
 		var reconciledPvtdata = args.Get(0).([]*ledger.ReconciledPvtdata)
 		require.Equal(t, 1, len(reconciledPvtdata))
 		pvtDataStore = append(pvtDataStore, reconciledPvtdata)
 		commitPvtDataOfOldBlocksHappened = true
+
+		require.Nil(t, args.Get(1))
 		wg.Done()
 	}).Return([]*ledger.PvtdataHashMismatch{}, nil)
 
@@ -458,10 +485,11 @@ func TestReconciliationFailedToCommit(t *testing.T) {
 		}
 	}).Return(result, nil)
 
-	committer.On("CommitPvtDataOfOldBlocks", mock.Anything).Return(nil, errors.New("failed to commit"))
+	committer.On("CommitPvtDataOfOldBlocks", mock.Anything, mock.Anything).Return(nil, errors.New("failed to commit"))
 
 	r := &Reconciler{
-		channel:                "",
+		channel:                "mychannel",
+		logger:                 logger.With("channel", "mychannel"),
 		metrics:                metrics.NewGossipMetrics(&disabled.Provider{}).PrivdataMetrics,
 		ReconcileSleepInterval: time.Minute,
 		ReconcileBatchSize:     1,
@@ -514,37 +542,35 @@ func TestFailuresWhileReconcilingMissingPvtData(t *testing.T) {
 }
 
 func TestConstructUnreconciledMissingData(t *testing.T) {
-	requestedMissingData := func() privdatacommon.Dig2CollectionConfig {
-		return privdatacommon.Dig2CollectionConfig{
-			privdatacommon.DigKey{
-				TxId:       "tx1",
-				Namespace:  "ns1",
-				Collection: "coll1",
-				BlockSeq:   1,
-				SeqInBlock: 1,
-			}: nil,
-			privdatacommon.DigKey{
-				TxId:       "tx1",
-				Namespace:  "ns2",
-				Collection: "coll2",
-				BlockSeq:   1,
-				SeqInBlock: 1,
-			}: nil,
-			privdatacommon.DigKey{
-				TxId:       "tx1",
-				Namespace:  "ns3",
-				Collection: "coll3",
-				BlockSeq:   1,
-				SeqInBlock: 3,
-			}: nil,
-			privdatacommon.DigKey{
-				TxId:       "tx2",
-				Namespace:  "ns4",
-				Collection: "coll4",
-				BlockSeq:   4,
-				SeqInBlock: 4,
-			}: nil,
-		}
+	requestedMissingData := privdatacommon.Dig2CollectionConfig{
+		privdatacommon.DigKey{
+			TxId:       "tx1",
+			Namespace:  "ns1",
+			Collection: "coll1",
+			BlockSeq:   1,
+			SeqInBlock: 1,
+		}: nil,
+		privdatacommon.DigKey{
+			TxId:       "tx1",
+			Namespace:  "ns2",
+			Collection: "coll2",
+			BlockSeq:   1,
+			SeqInBlock: 1,
+		}: nil,
+		privdatacommon.DigKey{
+			TxId:       "tx1",
+			Namespace:  "ns3",
+			Collection: "coll3",
+			BlockSeq:   1,
+			SeqInBlock: 3,
+		}: nil,
+		privdatacommon.DigKey{
+			TxId:       "tx2",
+			Namespace:  "ns4",
+			Collection: "coll4",
+			BlockSeq:   4,
+			SeqInBlock: 4,
+		}: nil,
 	}
 
 	testCases := []struct {
@@ -672,8 +698,13 @@ func TestConstructUnreconciledMissingData(t *testing.T) {
 
 	for _, testCase := range testCases {
 		t.Run(testCase.description, func(t *testing.T) {
-			unreconciledData := constructUnreconciledMissingData(requestedMissingData(), testCase.fetchedData)
-			require.Equal(t, testCase.expectedUnreconciledMissingData, unreconciledData)
+			unreconciledData := constructUnreconciledMissingData(requestedMissingData, testCase.fetchedData)
+			require.Equal(t, len(testCase.expectedUnreconciledMissingData), len(unreconciledData))
+			for blkNum, txsMissingData := range testCase.expectedUnreconciledMissingData {
+				for txNum, expectedUnreconciledData := range txsMissingData {
+					require.ElementsMatch(t, expectedUnreconciledData, unreconciledData[blkNum][txNum])
+				}
+			}
 		})
 	}
 }

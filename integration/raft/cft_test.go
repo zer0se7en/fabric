@@ -17,12 +17,14 @@ import (
 	"path"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	docker "github.com/fsouza/go-dockerclient"
 	"github.com/golang/protobuf/proto"
+	conftx "github.com/hyperledger/fabric-config/configtx"
 	"github.com/hyperledger/fabric-protos-go/common"
 	"github.com/hyperledger/fabric-protos-go/msp"
 	"github.com/hyperledger/fabric/cmd/common/signer"
@@ -378,7 +380,7 @@ var _ = Describe("EndToEnd Crash Fault Tolerance", func() {
 
 			By("Expiring orderer TLS certificates")
 			for filePath, certPEM := range serverTLSCerts {
-				expiredCert, earlyMadeCACert := expireCertificate(certPEM, ordererTLSCACert, ordererTLSCAKey)
+				expiredCert, earlyMadeCACert := expireCertificate(certPEM, ordererTLSCACert, ordererTLSCAKey, time.Now())
 				err = ioutil.WriteFile(filePath, expiredCert, 0600)
 				Expect(err).NotTo(HaveOccurred())
 
@@ -427,7 +429,8 @@ var _ = Describe("EndToEnd Crash Fault Tolerance", func() {
 			o3Runner = network.OrdererRunner(o3)
 
 			By("Launching orderers with a clustered timeshift")
-			for _, orderer := range []*nwo.Orderer{o1, o2, o3} {
+			orderers := []*nwo.Orderer{o1, o2, o3}
+			for _, orderer := range orderers {
 				ordererConfig := network.ReadOrdererConfig(orderer)
 				ordererConfig.General.Cluster.TLSHandshakeTimeShift = 5 * time.Minute
 				network.WriteOrdererConfig(orderer, ordererConfig)
@@ -457,7 +460,7 @@ var _ = Describe("EndToEnd Crash Fault Tolerance", func() {
 			o3Runner = network.OrdererRunner(o3)
 
 			By("Launching orderers again without a general timeshift re-using the cluster port")
-			for _, orderer := range []*nwo.Orderer{o1, o2, o3} {
+			for _, orderer := range orderers {
 				ordererConfig := network.ReadOrdererConfig(orderer)
 				ordererConfig.General.ListenPort = ordererConfig.General.Cluster.ListenPort
 				ordererConfig.General.TLS.Certificate = ordererConfig.General.Cluster.ServerCertificate
@@ -467,6 +470,8 @@ var _ = Describe("EndToEnd Crash Fault Tolerance", func() {
 				ordererConfig.General.Cluster.ListenAddress = ""
 				ordererConfig.General.Cluster.ServerCertificate = ""
 				ordererConfig.General.Cluster.ServerPrivateKey = ""
+				ordererConfig.General.Cluster.ClientCertificate = ""
+				ordererConfig.General.Cluster.ClientPrivateKey = ""
 				network.WriteOrdererConfig(orderer, ordererConfig)
 			}
 
@@ -496,7 +501,7 @@ var _ = Describe("EndToEnd Crash Fault Tolerance", func() {
 			o3Runner = network.OrdererRunner(o3)
 
 			By("Launching orderers again with a general timeshift re-using the cluster port")
-			for _, orderer := range []*nwo.Orderer{o1, o2, o3} {
+			for _, orderer := range orderers {
 				ordererConfig := network.ReadOrdererConfig(orderer)
 				ordererConfig.General.TLS.TLSHandshakeTimeShift = 5 * time.Minute
 				network.WriteOrdererConfig(orderer, ordererConfig)
@@ -512,6 +517,129 @@ var _ = Describe("EndToEnd Crash Fault Tolerance", func() {
 
 			By("Waiting for a leader to be elected")
 			findLeader([]*ginkgomon.Runner{o1Runner, o2Runner, o3Runner})
+
+			By("submitting config updates to orderers with expired TLS certs to replace the expired certs")
+			timeShift := 5 * time.Minute
+			for _, o := range orderers {
+				channelConfig := fetchConfig(network, peer, o, nwo.ClusterPort, network.SystemChannel.Name, timeShift)
+				c := conftx.New(channelConfig)
+				err = c.Orderer().RemoveConsenter(consenterChannelConfig(network, o))
+				Expect(err).NotTo(HaveOccurred())
+
+				By("renewing the orderer TLS certificates for " + o.Name)
+				renewOrdererCertificates(network, o)
+				err = c.Orderer().AddConsenter(consenterChannelConfig(network, o))
+				Expect(err).NotTo(HaveOccurred())
+
+				By("updating the config for " + o.Name)
+				updateOrdererConfig(network, o, nwo.ClusterPort, network.SystemChannel.Name, timeShift, c.OriginalConfig(), c.UpdatedConfig(), peer)
+			}
+
+			By("Killing orderers")
+			o1Proc.Signal(syscall.SIGTERM)
+			o2Proc.Signal(syscall.SIGTERM)
+			o3Proc.Signal(syscall.SIGTERM)
+			Eventually(o1Proc.Wait(), network.EventuallyTimeout).Should(Receive())
+			Eventually(o2Proc.Wait(), network.EventuallyTimeout).Should(Receive())
+			Eventually(o3Proc.Wait(), network.EventuallyTimeout).Should(Receive())
+
+			o1Runner = network.OrdererRunner(o1)
+			o2Runner = network.OrdererRunner(o2)
+			o3Runner = network.OrdererRunner(o3)
+
+			By("Launching orderers again without a general timeshift")
+			for _, o := range orderers {
+				ordererConfig := network.ReadOrdererConfig(o)
+				ordererConfig.General.TLS.TLSHandshakeTimeShift = 0
+				network.WriteOrdererConfig(o, ordererConfig)
+			}
+
+			o1Proc = ifrit.Invoke(o1Runner)
+			o2Proc = ifrit.Invoke(o2Runner)
+			o3Proc = ifrit.Invoke(o3Runner)
+
+			Eventually(o1Proc.Ready(), network.EventuallyTimeout).Should(BeClosed())
+			Eventually(o2Proc.Ready(), network.EventuallyTimeout).Should(BeClosed())
+			Eventually(o3Proc.Ready(), network.EventuallyTimeout).Should(BeClosed())
+
+			By("Waiting for a leader to be elected")
+			findLeader([]*ginkgomon.Runner{o1Runner, o2Runner, o3Runner})
+		})
+
+		It("disregards certificate renewal if only the validity period changed", func() {
+			config := nwo.MultiNodeEtcdRaft()
+			config.Channels = append(config.Channels, &nwo.Channel{Name: "foo", Profile: "TwoOrgsChannel"})
+			config.Channels = append(config.Channels, &nwo.Channel{Name: "bar", Profile: "TwoOrgsChannel"})
+			network = nwo.New(config, testDir, client, StartPort(), components)
+
+			network.GenerateConfigTree()
+			network.Bootstrap()
+
+			peer = network.Peer("Org1", "peer0")
+
+			o1 := network.Orderer("orderer1")
+			o2 := network.Orderer("orderer2")
+			o3 := network.Orderer("orderer3")
+
+			orderers := []*nwo.Orderer{o1, o2, o3}
+
+			o1Runner := network.OrdererRunner(o1)
+			o2Runner := network.OrdererRunner(o2)
+			o3Runner := network.OrdererRunner(o3)
+			ordererRunners := []*ginkgomon.Runner{o1Runner, o2Runner, o3Runner}
+
+			o1Proc = ifrit.Invoke(o1Runner)
+			o2Proc = ifrit.Invoke(o2Runner)
+			o3Proc = ifrit.Invoke(o3Runner)
+			ordererProcesses := []ifrit.Process{o1Proc, o2Proc, o3Proc}
+
+			Eventually(o1Proc.Ready(), network.EventuallyTimeout).Should(BeClosed())
+			Eventually(o2Proc.Ready(), network.EventuallyTimeout).Should(BeClosed())
+			Eventually(o3Proc.Ready(), network.EventuallyTimeout).Should(BeClosed())
+
+			By("Waiting for them to elect a leader")
+			findLeader(ordererRunners)
+
+			By("Creating a channel")
+			network.CreateChannel("foo", o1, peer)
+
+			assertBlockReception(map[string]int{
+				"foo":           0,
+				"systemchannel": 1,
+			}, []*nwo.Orderer{o1, o2, o3}, peer, network)
+
+			By("Killing all orderers")
+			for i := range orderers {
+				ordererProcesses[i].Signal(syscall.SIGTERM)
+				Eventually(ordererProcesses[i].Wait(), network.EventuallyTimeout).Should(Receive())
+			}
+
+			By("Renewing the certificates for all orderers")
+			renewOrdererCertificates(network, o1, o2, o3)
+
+			By("Starting the orderers again")
+			for i := range orderers {
+				ordererRunner := network.OrdererRunner(orderers[i])
+				ordererRunners[i] = ordererRunner
+				ordererProcesses[i] = ifrit.Invoke(ordererRunner)
+				Eventually(ordererProcesses[0].Ready(), network.EventuallyTimeout).Should(BeClosed())
+			}
+
+			o1Proc = ordererProcesses[0]
+			o2Proc = ordererProcesses[1]
+			o3Proc = ordererProcesses[2]
+
+			By("Waiting for them to elect a leader once again")
+			findLeader(ordererRunners)
+
+			By("Creating a channel again")
+			network.CreateChannel("bar", o1, peer)
+
+			assertBlockReception(map[string]int{
+				"foo":           0,
+				"bar":           0,
+				"systemchannel": 2,
+			}, []*nwo.Orderer{o1, o2, o3}, peer, network)
 		})
 	})
 
@@ -539,7 +667,7 @@ var _ = Describe("EndToEnd Crash Fault Tolerance", func() {
 			originalAdminCert, err := ioutil.ReadFile(adminCertPath)
 			Expect(err).NotTo(HaveOccurred())
 
-			expiredAdminCert, earlyCACert := expireCertificate(originalAdminCert, ordererCACert, ordererCAKey)
+			expiredAdminCert, earlyCACert := expireCertificate(originalAdminCert, ordererCACert, ordererCAKey, time.Now())
 			err = ioutil.WriteFile(adminCertPath, expiredAdminCert, 0600)
 			Expect(err).NotTo(HaveOccurred())
 
@@ -688,7 +816,37 @@ func findLeader(ordererRunners []*ginkgomon.Runner) int {
 	return firstLeader
 }
 
-func expireCertificate(certPEM, caCertPEM, caKeyPEM []byte) (expiredcertPEM []byte, earlyMadeCACertPEM []byte) {
+func renewOrdererCertificates(network *nwo.Network, orderers ...*nwo.Orderer) {
+	if len(orderers) == 0 {
+		return
+	}
+	ordererDomain := network.Organization(orderers[0].Organization).Domain
+	ordererTLSCAKeyPath := filepath.Join(network.RootDir, "crypto", "ordererOrganizations",
+		ordererDomain, "tlsca", "priv_sk")
+
+	ordererTLSCAKey, err := ioutil.ReadFile(ordererTLSCAKeyPath)
+	Expect(err).NotTo(HaveOccurred())
+
+	ordererTLSCACertPath := filepath.Join(network.RootDir, "crypto", "ordererOrganizations",
+		ordererDomain, "tlsca", fmt.Sprintf("tlsca.%s-cert.pem", ordererDomain))
+	ordererTLSCACert, err := ioutil.ReadFile(ordererTLSCACertPath)
+	Expect(err).NotTo(HaveOccurred())
+
+	serverTLSCerts := map[string][]byte{}
+	for _, orderer := range orderers {
+		tlsCertPath := filepath.Join(network.OrdererLocalTLSDir(orderer), "server.crt")
+		serverTLSCerts[tlsCertPath], err = ioutil.ReadFile(tlsCertPath)
+		Expect(err).NotTo(HaveOccurred())
+	}
+
+	for filePath, certPEM := range serverTLSCerts {
+		renewedCert, _ := expireCertificate(certPEM, ordererTLSCACert, ordererTLSCAKey, time.Now().Add(time.Hour))
+		err = ioutil.WriteFile(filePath, renewedCert, 0600)
+		Expect(err).NotTo(HaveOccurred())
+	}
+}
+
+func expireCertificate(certPEM, caCertPEM, caKeyPEM []byte, expirationTime time.Time) (expiredcertPEM []byte, earlyMadeCACertPEM []byte) {
 	keyAsDER, _ := pem.Decode(caKeyPEM)
 	caKeyWithoutType, err := x509.ParsePKCS8PrivateKey(keyAsDER.Bytes)
 	Expect(err).NotTo(HaveOccurred())
@@ -709,7 +867,7 @@ func expireCertificate(certPEM, caCertPEM, caKeyPEM []byte) (expiredcertPEM []by
 	// As well as the CA certificate
 	caCert.NotBefore = time.Now().Add((-1) * time.Hour)
 	// The certificate expires now
-	cert.NotAfter = time.Now()
+	cert.NotAfter = expirationTime
 
 	// The CA signs the certificate
 	certBytes, err := x509.CreateCertificate(rand.Reader, cert, caCert, cert.PublicKey, caKey)
@@ -792,7 +950,10 @@ func configFromBootstrapBlock(bootstrapBlock []byte) *common.Config {
 	block := &common.Block{}
 	err := proto.Unmarshal(bootstrapBlock, block)
 	Expect(err).NotTo(HaveOccurred())
+	return configFromBlock(block)
+}
 
+func configFromBlock(block *common.Block) *common.Config {
 	envelope, err := protoutil.GetEnvelopeFromBlock(block.Data.Data[0])
 	Expect(err).NotTo(HaveOccurred())
 
@@ -804,5 +965,79 @@ func configFromBootstrapBlock(bootstrapBlock []byte) *common.Config {
 	Expect(err).NotTo(HaveOccurred())
 
 	return configEnv.Config
+}
 
+func fetchConfig(n *nwo.Network, peer *nwo.Peer, orderer *nwo.Orderer, port nwo.PortName, channel string, tlsHandshakeTimeShift time.Duration) *common.Config {
+	tempDir, err := ioutil.TempDir(n.RootDir, "fetchConfig")
+	Expect(err).NotTo(HaveOccurred())
+	defer os.RemoveAll(tempDir)
+
+	output := filepath.Join(tempDir, "config_block.pb")
+	fetchConfigBlock(n, peer, orderer, port, n.SystemChannel.Name, output, tlsHandshakeTimeShift)
+	configBlock := nwo.UnmarshalBlockFromFile(output)
+	return configFromBlock(configBlock)
+}
+
+func fetchConfigBlock(n *nwo.Network, peer *nwo.Peer, orderer *nwo.Orderer, port nwo.PortName, channel, output string, tlsHandshakeTimeShift time.Duration) {
+	fetch := func() int {
+		sess, err := n.OrdererAdminSession(orderer, peer, commands.ChannelFetch{
+			ChannelID:             channel,
+			Block:                 "config",
+			Orderer:               n.OrdererAddress(orderer, port),
+			OutputFile:            output,
+			ClientAuth:            n.ClientAuthRequired,
+			TLSHandshakeTimeShift: tlsHandshakeTimeShift,
+		})
+		Expect(err).NotTo(HaveOccurred())
+		code := sess.Wait(n.EventuallyTimeout).ExitCode()
+		if code == 0 {
+			Expect(sess.Err).To(gbytes.Say("Received block: "))
+		}
+		return code
+	}
+	Eventually(fetch, n.EventuallyTimeout).Should(Equal(0))
+}
+
+func currentConfigBlockNumber(n *nwo.Network, peer *nwo.Peer, orderer *nwo.Orderer, port nwo.PortName, channel string, tlsHandshakeTimeShift time.Duration) uint64 {
+	tempDir, err := ioutil.TempDir(n.RootDir, "currentConfigBlock")
+	Expect(err).NotTo(HaveOccurred())
+	defer os.RemoveAll(tempDir)
+
+	output := filepath.Join(tempDir, "config_block.pb")
+	fetchConfigBlock(n, peer, orderer, port, channel, output, tlsHandshakeTimeShift)
+	configBlock := nwo.UnmarshalBlockFromFile(output)
+	return configBlock.Header.Number
+}
+
+func updateOrdererConfig(n *nwo.Network, orderer *nwo.Orderer, port nwo.PortName, channel string, tlsHandshakeTimeShift time.Duration, current, updated *common.Config, submitter *nwo.Peer, additionalSigners ...*nwo.Orderer) {
+	tempDir, err := ioutil.TempDir(n.RootDir, "updateConfig")
+	Expect(err).NotTo(HaveOccurred())
+	updateFile := filepath.Join(tempDir, "update.pb")
+	defer os.RemoveAll(tempDir)
+
+	currentBlockNumber := currentConfigBlockNumber(n, submitter, orderer, port, channel, tlsHandshakeTimeShift)
+	nwo.ComputeUpdateOrdererConfig(updateFile, n, channel, current, updated, submitter, additionalSigners...)
+
+	Eventually(func() bool {
+		sess, err := n.OrdererAdminSession(orderer, submitter, commands.ChannelUpdate{
+			ChannelID:             channel,
+			Orderer:               n.OrdererAddress(orderer, port),
+			File:                  updateFile,
+			ClientAuth:            n.ClientAuthRequired,
+			TLSHandshakeTimeShift: tlsHandshakeTimeShift,
+		})
+		Expect(err).NotTo(HaveOccurred())
+
+		sess.Wait(n.EventuallyTimeout)
+		if sess.ExitCode() != 0 {
+			return false
+		}
+
+		return strings.Contains(string(sess.Err.Contents()), "Successfully submitted channel update")
+	}, n.EventuallyTimeout).Should(BeTrue())
+
+	ccb := func() uint64 {
+		return currentConfigBlockNumber(n, submitter, orderer, port, channel, tlsHandshakeTimeShift)
+	}
+	Eventually(ccb, n.EventuallyTimeout).Should(BeNumerically(">", currentBlockNumber))
 }

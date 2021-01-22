@@ -15,11 +15,21 @@ import (
 	"strings"
 	"testing"
 
+	cb "github.com/hyperledger/fabric-protos-go/common"
+	pb "github.com/hyperledger/fabric-protos-go/peer"
+	"github.com/hyperledger/fabric/bccsp/factory"
+	"github.com/hyperledger/fabric/bccsp/sw"
+	"github.com/hyperledger/fabric/common/channelconfig"
 	"github.com/hyperledger/fabric/common/flogging"
 	"github.com/hyperledger/fabric/common/util"
 	"github.com/hyperledger/fabric/core/config/configtest"
+	"github.com/hyperledger/fabric/internal/configtxgen/encoder"
+	"github.com/hyperledger/fabric/internal/configtxgen/genesisconfig"
 	"github.com/hyperledger/fabric/internal/peer/common"
 	"github.com/hyperledger/fabric/msp"
+	msptesttools "github.com/hyperledger/fabric/msp/mgmt/testtools"
+	"github.com/hyperledger/fabric/protoutil"
+	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"github.com/stretchr/testify/require"
@@ -250,4 +260,91 @@ func TestInitCmdWithoutInitCrypto(t *testing.T) {
 	os.Setenv("CORE_PEER_MSPCONFIGPATH", dir)
 
 	common.InitCmd(packageCmd, nil)
+}
+
+func TestGetOrdererEndpointFromConfigTx(t *testing.T) {
+	require.NoError(t, msptesttools.LoadMSPSetupForTesting())
+	signer, err := common.GetDefaultSigner()
+	require.NoError(t, err)
+	factory.InitFactories(nil)
+	cryptoProvider, err := sw.NewDefaultSecurityLevelWithKeystore(sw.NewDummyKeyStore())
+	require.NoError(t, err)
+
+	t.Run("green-path", func(t *testing.T) {
+		profile := genesisconfig.Load(genesisconfig.SampleInsecureSoloProfile, configtest.GetDevConfigDir())
+		channelGroup, err := encoder.NewChannelGroup(profile)
+		require.NoError(t, err)
+		channelConfig := &cb.Config{ChannelGroup: channelGroup}
+
+		ordererAddresses := channelconfig.OrdererAddressesValue([]string{"order-1-endpoint", "order-2-end-point"})
+		channelConfig.ChannelGroup.Values[ordererAddresses.Key()] = &cb.ConfigValue{
+			Value: protoutil.MarshalOrPanic(ordererAddresses.Value()),
+		}
+
+		mockEndorserClient := common.GetMockEndorserClient(
+			&pb.ProposalResponse{
+				Response:    &pb.Response{Status: 200, Payload: protoutil.MarshalOrPanic(channelConfig)},
+				Endorsement: &pb.Endorsement{},
+			},
+			nil,
+		)
+
+		ordererEndpoints, err := common.GetOrdererEndpointOfChain("test-channel", signer, mockEndorserClient, cryptoProvider)
+		require.NoError(t, err)
+		require.Equal(t, []string{"order-1-endpoint", "order-2-end-point"}, ordererEndpoints)
+	})
+
+	t.Run("error-invoking-CSCC", func(t *testing.T) {
+		mockEndorserClient := common.GetMockEndorserClient(
+			nil,
+			errors.Errorf("cscc-invocation-error"),
+		)
+		_, err := common.GetOrdererEndpointOfChain("test-channel", signer, mockEndorserClient, cryptoProvider)
+		require.EqualError(t, err, "error endorsing GetChannelConfig: cscc-invocation-error")
+	})
+
+	t.Run("nil-response", func(t *testing.T) {
+		mockEndorserClient := common.GetMockEndorserClient(
+			nil,
+			nil,
+		)
+		_, err := common.GetOrdererEndpointOfChain("test-channel", signer, mockEndorserClient, cryptoProvider)
+		require.EqualError(t, err, "received nil proposal response")
+	})
+
+	t.Run("bad-status-code-from-cscc", func(t *testing.T) {
+		mockEndorserClient := common.GetMockEndorserClient(
+			&pb.ProposalResponse{
+				Response:    &pb.Response{Status: 404, Payload: []byte{}},
+				Endorsement: &pb.Endorsement{},
+			},
+			nil,
+		)
+		_, err := common.GetOrdererEndpointOfChain("test-channel", signer, mockEndorserClient, cryptoProvider)
+		require.EqualError(t, err, "error bad proposal response 404: ")
+	})
+
+	t.Run("unmarshalable-config", func(t *testing.T) {
+		mockEndorserClient := common.GetMockEndorserClient(
+			&pb.ProposalResponse{
+				Response:    &pb.Response{Status: 200, Payload: []byte("unmarshalable-config")},
+				Endorsement: &pb.Endorsement{},
+			},
+			nil,
+		)
+		_, err := common.GetOrdererEndpointOfChain("test-channel", signer, mockEndorserClient, cryptoProvider)
+		require.EqualError(t, err, "error unmarshaling channel config: unexpected EOF")
+	})
+
+	t.Run("unloadable-config", func(t *testing.T) {
+		mockEndorserClient := common.GetMockEndorserClient(
+			&pb.ProposalResponse{
+				Response:    &pb.Response{Status: 200, Payload: []byte{}},
+				Endorsement: &pb.Endorsement{},
+			},
+			nil,
+		)
+		_, err := common.GetOrdererEndpointOfChain("test-channel", signer, mockEndorserClient, cryptoProvider)
+		require.EqualError(t, err, "error loading channel config: config must contain a channel group")
+	})
 }

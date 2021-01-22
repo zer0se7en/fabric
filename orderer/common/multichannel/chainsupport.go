@@ -12,9 +12,11 @@ import (
 	"github.com/hyperledger/fabric/common/ledger/blockledger"
 	"github.com/hyperledger/fabric/internal/pkg/identity"
 	"github.com/hyperledger/fabric/orderer/common/blockcutter"
+	"github.com/hyperledger/fabric/orderer/common/localconfig"
 	"github.com/hyperledger/fabric/orderer/common/msgprocessor"
 	"github.com/hyperledger/fabric/orderer/common/types"
 	"github.com/hyperledger/fabric/orderer/consensus"
+	"github.com/hyperledger/fabric/orderer/consensus/inactive"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
 )
@@ -54,7 +56,7 @@ func newChainSupport(
 	// Assuming a block created with cb.NewBlock(), this should not
 	// error even if the orderer metadata is an empty byte slice
 	if err != nil {
-		return nil, errors.Wrapf(err, "error extracting orderer metadata for channel: %s", ledgerResources.ConfigtxValidator().ChannelID())
+		return nil, errors.WithMessagef(err, "error extracting orderer metadata for channel: %s", ledgerResources.ConfigtxValidator().ChannelID())
 	}
 
 	// Construct limited support needed as a parameter for additional support
@@ -84,7 +86,7 @@ func newChainSupport(
 
 	cs.Chain, err = consenter.HandleChain(cs, metadata)
 	if err != nil {
-		return nil, errors.Wrapf(err, "error creating consenter for channel: %s", cs.ChannelID())
+		return nil, errors.WithMessagef(err, "error creating consenter for channel: %s", cs.ChannelID())
 	}
 
 	cs.MetadataValidator, ok = cs.Chain.(consensus.MetadataValidator)
@@ -94,8 +96,11 @@ func newChainSupport(
 
 	cs.StatusReporter, ok = cs.Chain.(consensus.StatusReporter)
 	if !ok { // Non-cluster types: solo, kafka
-		cs.StatusReporter = consensus.StaticStatusReporter{ClusterRelation: types.ClusterRelationNone, Status: types.StatusActive}
+		cs.StatusReporter = consensus.StaticStatusReporter{ConsensusRelation: types.ConsensusRelationOther, Status: types.StatusActive}
 	}
+
+	clusterRelation, status := cs.StatusReporter.StatusReport()
+	registrar.ReportConsensusRelationAndStatusMetrics(cs.ChannelID(), clusterRelation, status)
 
 	logger.Debugf("[channel: %s] Done creating channel support resources", cs.ChannelID())
 
@@ -139,7 +144,7 @@ func (cs *ChainSupport) ProposeConfigUpdate(configtx *cb.Envelope) (*cb.ConfigEn
 	}
 
 	if err = checkResources(bundle); err != nil {
-		return nil, errors.Wrap(err, "config update is not compatible")
+		return nil, errors.WithMessage(err, "config update is not compatible")
 	}
 
 	if err = cs.ValidateNew(bundle); err != nil {
@@ -150,17 +155,15 @@ func (cs *ChainSupport) ProposeConfigUpdate(configtx *cb.Envelope) (*cb.ConfigEn
 	if !ok {
 		logger.Panic("old config is missing orderer group")
 	}
-	oldMetadata := oldOrdererConfig.ConsensusMetadata()
 
 	// we can remove this check since this is being validated in checkResources earlier
 	newOrdererConfig, ok := bundle.OrdererConfig()
 	if !ok {
 		return nil, errors.New("new config is missing orderer group")
 	}
-	newMetadata := newOrdererConfig.ConsensusMetadata()
 
-	if err = cs.ValidateConsensusMetadata(oldMetadata, newMetadata, false); err != nil {
-		return nil, errors.Wrap(err, "consensus metadata update for channel config update is invalid")
+	if err = cs.ValidateConsensusMetadata(oldOrdererConfig, newOrdererConfig, false); err != nil {
+		return nil, errors.WithMessage(err, "consensus metadata update for channel config update is invalid")
 	}
 	return env, nil
 }
@@ -179,4 +182,19 @@ func (cs *ChainSupport) Sequence() uint64 {
 // unlike WriteBlock that also mutates its metadata.
 func (cs *ChainSupport) Append(block *cb.Block) error {
 	return cs.ledgerResources.ReadWriter.Append(block)
+}
+
+func newOnBoardingChainSupport(
+	ledgerResources *ledgerResources,
+	config localconfig.TopLevel,
+	bccsp bccsp.BCCSP,
+) (*ChainSupport, error) {
+	cs := &ChainSupport{ledgerResources: ledgerResources}
+	cs.Processor = msgprocessor.NewStandardChannel(cs, msgprocessor.CreateStandardChannelFilters(cs, config), bccsp)
+	cs.Chain = &inactive.Chain{Err: errors.New("system channel creation pending: server requires restart")}
+	cs.StatusReporter = consensus.StaticStatusReporter{ConsensusRelation: types.ConsensusRelationConsenter, Status: types.StatusInactive}
+
+	logger.Debugf("[channel: %s] Done creating onboarding channel support resources", cs.ChannelID())
+
+	return cs, nil
 }

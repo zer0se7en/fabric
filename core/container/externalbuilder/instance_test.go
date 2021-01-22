@@ -249,7 +249,7 @@ var _ = Describe("Instance", func() {
 			Entry("Number", `100`, externalbuilder.Duration(100), BeNil()),
 			Entry("Duration", `"1s"`, externalbuilder.Duration(time.Second), BeNil()),
 			Entry("List", `[1, 2, 3]`, externalbuilder.Duration(time.Second), MatchError("invalid duration")),
-			Entry("Nonsense", `"nonsense"`, externalbuilder.Duration(time.Second), MatchError("time: invalid duration nonsense")),
+			Entry("Nonsense", `"nonsense"`, externalbuilder.Duration(time.Second), MatchError(MatchRegexp(`time: invalid duration "?nonsense"?`))),
 		)
 
 		DescribeTable("Round Trip",
@@ -284,7 +284,7 @@ var _ = Describe("Instance", func() {
 			Expect(instance.Session).NotTo(BeNil())
 
 			errCh := make(chan error)
-			go func() { errCh <- instance.Session.Wait() }()
+			go func(sess *externalbuilder.Session) { errCh <- sess.Wait() }(instance.Session)
 			Eventually(errCh).Should(Receive(BeNil()))
 		})
 	})
@@ -298,7 +298,7 @@ var _ = Describe("Instance", func() {
 			instance.TermTimeout = time.Minute
 
 			errCh := make(chan error)
-			go func() { errCh <- instance.Session.Wait() }()
+			go func() { errCh <- sess.Wait() }()
 			Consistently(errCh).ShouldNot(Receive())
 
 			err = instance.Stop()
@@ -316,7 +316,7 @@ var _ = Describe("Instance", func() {
 				instance.TermTimeout = time.Second
 
 				errCh := make(chan error)
-				go func() { errCh <- instance.Session.Wait() }()
+				go func() { errCh <- sess.Wait() }()
 				Consistently(errCh).ShouldNot(Receive())
 
 				err = instance.Stop()

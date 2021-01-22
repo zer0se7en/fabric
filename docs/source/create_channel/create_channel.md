@@ -1,6 +1,8 @@
-# Creating a new channel
+# Create a channel with a system channel (legacy)
 
 You can use this tutorial to learn how to create new channels using the [configtxgen](../commands/configtxgen.html) CLI tool and then use the [peer channel](../commands/peerchannel.html) commands to join a channel with your peers. While this tutorial will leverage the Fabric test network to create the new channel, the steps in this tutorial can also be used by network operators in a production environment.
+
+Fabric v2.3 introduces the capability to create a channel without requiring a system channel, removing an extra layer of administration from the process. Check out the [Create a channel without a system channel](create_channel_participation.html) tutorial to learn more about the steps required.
 
 In the process of creating the channel, this tutorial will take you through the following steps and concepts:
 
@@ -50,7 +52,7 @@ You can find the `configtx.yaml` file that is used to deploy the test network in
 
   The `configtxgen` tool uses `configtx.yaml` file to create a complete genesis block for the system channel. As a result, the system channel profile needs to specify the full system channel configuration. The channel profile used to create the channel creation transaction only needs to contain the additional configuration information required to create an application channel.
 
-You can visit the [Using configtx.yaml to create a channel genesis block](create_channel_genesis.html) tutorial to learn more about this file. For now, we will return to the operational aspects of creating the channel, though we will reference parts of this file in future steps.
+You can visit the [Using configtx.yaml to create a channel genesis block](create_channel_config.html) tutorial to learn more about this file. For now, we will return to the operational aspects of creating the channel, though we will reference parts of this file in future steps.
 
 ## Start the network
 
@@ -157,7 +159,7 @@ export CORE_PEER_ADDRESS=localhost:7051
 
 You can now create the channel by using the following command:
 ```
-peer channel create -o localhost:7050  --ordererTLSHostnameOverride orderer.example.com -c channel1 -f ./channel-artifacts/channel1.tx --outputBlock ./channel-artifacts/channel1.block --tls --cafile ${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem
+peer channel create -o localhost:7050  --ordererTLSHostnameOverride orderer.example.com -c channel1 -f ./channel-artifacts/channel1.tx --outputBlock ./channel-artifacts/channel1.block --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem"
 ```
 
 The command above provides the path to the channel creation transaction file using the `-f` flag and uses the `-c` flag to specify the channel name. The `-o` flag is used to select the ordering node that will be used to create the channel. The `--cafile` is the path to the TLS certificate of the ordering node. When you run the `peer channel create` command, the `peer` CLI will generate the following response:
@@ -192,7 +194,7 @@ The command will list the block height of the channel and the hash of the most r
 Blockchain info: {"height":1,"currentBlockHash":"kvtQYYEL2tz0kDCNttPFNC4e6HVUFOGMTIDxZ+DeNQM="}
 ```
 
-We can now join the Org2 peer to the channel. Set the following environment variables to operate the `peer` CLI as the Org2 admin. The environment variables will also set the Org2 peer, ``peer0.org1.example.com``, as the target peer.
+We can now join the Org2 peer to the channel. Set the following environment variables to operate the `peer` CLI as the Org2 admin. The environment variables will also set the Org2 peer, ``peer0.org2.example.com``, as the target peer.
 ```
 export CORE_PEER_TLS_ENABLED=true
 export CORE_PEER_LOCALMSPID="Org2MSP"
@@ -203,7 +205,7 @@ export CORE_PEER_ADDRESS=localhost:9051
 
 While we still have the channel genesis block on our file system, in a more realistic scenario, Org2 would have the fetch the block from the ordering service. As an example, we will use the `peer channel fetch` command to get the genesis block for Org2:
 ```
-peer channel fetch 0 ./channel-artifacts/channel_org2.block -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com -c channel1 --tls --cafile ${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem
+peer channel fetch 0 ./channel-artifacts/channel_org2.block -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com -c channel1 --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem"
 ```
 
 The command uses `0` to specify that it needs to fetch the genesis block that is required to join the channel. If the command is successful, you should see the following output:
@@ -219,7 +221,7 @@ peer channel join -b ./channel-artifacts/channel_org2.block
 
 ## Set anchor peers
 
-After an organizations has joined their peers to the channel, they should select at least one of their peers to become an anchor peer. [Anchor peers](../gossip.html#anchor-peers) are required in order to take advantage of features such as private data and service discovery. Each organization should set multiple anchor peers on a channel for redundancy. For more information about gossip and anchor peers, see the [Gossip data dissemination protocol](../gossip.html).
+After an organization has joined their peers to the channel, they should select at least one of their peers to become an anchor peer. [Anchor peers](../gossip.html#anchor-peers) are required in order to take advantage of features such as private data and service discovery. Each organization should set multiple anchor peers on a channel for redundancy. For more information about gossip and anchor peers, see the [Gossip data dissemination protocol](../gossip.html).
 
 The endpoint information of the anchor peers of each organization is included in the channel configuration. Each channel member can specify their anchor peers by updating the channel. We will use the [configtxlator](../commands/configtxlator.html) tool to update the channel configuration and select an anchor peer for Org1 and Org2. The process for setting an anchor peer is similar to the steps that are required to make other channel updates and provides an introduction to how to use `configtxlator` to [update a channel configuration](../config_update.html). You will also need to install the [jq tool](https://stedolan.github.io/jq/) on your local machine.
 
@@ -235,7 +237,7 @@ export CORE_PEER_ADDRESS=localhost:7051
 
 You can use the following command to fetch the channel configuration:
 ```
-peer channel fetch config channel-artifacts/config_block.pb -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com -c channel1 --tls --cafile ${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem
+peer channel fetch config channel-artifacts/config_block.pb -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com -c channel1 --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem"
 ```
 Because the most recent channel configuration block is the channel genesis block, you will see the command return block 0 from the channel.
 ```
@@ -288,7 +290,7 @@ cd ..
 
 We can add the anchor peer by providing the new channel configuration to the `peer channel update` command. Because we are updating a section of the channel configuration that only affects Org1, other channel members do not need to approve the channel update.
 ```
-peer channel update -f channel-artifacts/config_update_in_envelope.pb -c channel1 -o localhost:7050  --ordererTLSHostnameOverride orderer.example.com --tls --cafile ${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem
+peer channel update -f channel-artifacts/config_update_in_envelope.pb -c channel1 -o localhost:7050  --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem"
 ```
 
 When the channel update is successful, you should see the following response:
@@ -307,7 +309,7 @@ export CORE_PEER_ADDRESS=localhost:9051
 
 Pull the latest channel configuration block, which is now the second block on the channel:
 ```
-peer channel fetch config channel-artifacts/config_block.pb -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com -c channel1 --tls --cafile ${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem
+peer channel fetch config channel-artifacts/config_block.pb -o localhost:7050 --ordererTLSHostnameOverride orderer.example.com -c channel1 --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem"
 ```
 
 Navigate back to the `channel-artifacts` directory:
@@ -348,7 +350,7 @@ cd ..
 
 Update the channel and set the Org2 anchor peer by issuing the following command:
 ```
-peer channel update -f channel-artifacts/config_update_in_envelope.pb -c channel1 -o localhost:7050  --ordererTLSHostnameOverride orderer.example.com --tls --cafile ${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem
+peer channel update -f channel-artifacts/config_update_in_envelope.pb -c channel1 -o localhost:7050  --ordererTLSHostnameOverride orderer.example.com --tls --cafile "${PWD}/organizations/ordererOrganizations/example.com/orderers/orderer.example.com/msp/tlscacerts/tlsca.example.com-cert.pem"
 ```
 
 You can confirm that the channel has been updated successfully by running the `peer channel info` command:
@@ -362,24 +364,32 @@ Blockchain info: {"height":3,"currentBlockHash":"eBpwWKTNUgnXGpaY2ojF4xeP3bWdjlP
 
 ## Deploy a chaincode to the new channel
 
-We can confirm that the channel was created successfully by deploying a chaincode to the channel. We can use the `network.sh` script to deploy the Fabcar chaincode to any test network channel. Deploy a chaincode to our new channel using the following command:
+We can confirm that the channel was created successfully by deploying a chaincode to the channel. We can use the `network.sh` script to deploy the Basic asset transfer chaincode to any test network channel. Deploy a chaincode to our new channel using the following command:
 ```
-./network.sh deployCC -c channel1
+./network.sh deployCC -ccn basic -ccp ../asset-transfer-basic/chaincode-go/ -ccl go -c channel1 --cci InitLedger
 ```
 
-After you run the command, you should see the chaincode being deployed to the channel in your logs. The chaincode is invoked to add data to the channel ledger and then queried.
+After you run the command, you should see the chaincode being deployed to the channel in your logs. The chaincode is invoked to add data to the channel ledger.
+
 ```
-[{"Key":"CAR0","Record":{"make":"Toyota","model":"Prius","colour":"blue","owner":"Tomoko"}},
-{"Key":"CAR1","Record":{"make":"Ford","model":"Mustang","colour":"red","owner":"Brad"}},
-{"Key":"CAR2","Record":{"make":"Hyundai","model":"Tucson","colour":"green","owner":"Jin Soo"}},
-{"Key":"CAR3","Record":{"make":"Volkswagen","model":"Passat","colour":"yellow","owner":"Max"}},
-{"Key":"CAR4","Record":{"make":"Tesla","model":"S","colour":"black","owner":"Adriana"}},
-{"Key":"CAR5","Record":{"make":"Peugeot","model":"205","colour":"purple","owner":"Michel"}},
-{"Key":"CAR6","Record":{"make":"Chery","model":"S22L","colour":"white","owner":"Aarav"}},
-{"Key":"CAR7","Record":{"make":"Fiat","model":"Punto","colour":"violet","owner":"Pari"}},
-{"Key":"CAR8","Record":{"make":"Tata","model":"Nano","colour":"indigo","owner":"Valeria"}},
-{"Key":"CAR9","Record":{"make":"Holden","model":"Barina","colour":"brown","owner":"Shotaro"}}]
-===================== Query successful on peer0.org1 on channel 'channel1' =====================
+2020-08-18 09:23:53.741 EDT [chaincodeCmd] chaincodeInvokeOrQuery -> INFO 001 Chaincode invoke successful. result: status:200
+===================== Invoke transaction successful on peer0.org1 peer0.org2 on channel 'channel1' =====================
+```
+
+We can confirm the data was added with the below query.
+
+```
+peer chaincode query -C channel1 -n basic -c '{"Args":["getAllAssets"]}'
+```
+
+After you run the query, you should see the assets that were added to the channel ledger.
+```
+[{"ID":"asset1","color":"blue","size":5,"owner":"Tomoko","appraisedValue":300},
+{"ID":"asset2","color":"red","size":5,"owner":"Brad","appraisedValue":400},
+{"ID":"asset3","color":"green","size":10,"owner":"Jin Soo","appraisedValue":500},
+{"ID":"asset4","color":"yellow","size":10,"owner":"Max","appraisedValue":600},
+{"ID":"asset5","color":"black","size":15,"owner":"Adriana","appraisedValue":700},
+{"ID":"asset6","color":"white","size":15,"owner":"Michel","appraisedValue":800}]
 ```
 
 <!--- Licensed under Creative Commons Attribution 4.0 International License

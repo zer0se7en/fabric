@@ -13,7 +13,6 @@ import (
 	"mime/multipart"
 	"net/http"
 	"path"
-	"strconv"
 	"strings"
 
 	"github.com/golang/protobuf/proto"
@@ -30,7 +29,6 @@ const (
 	URLBaseV1              = "/participation/v1/"
 	URLBaseV1Channels      = URLBaseV1 + "channels"
 	FormDataConfigBlockKey = "config-block"
-	RemoveStorageQueryKey  = "removeStorage"
 
 	channelIDKey        = "channelID"
 	urlWithChannelIDKey = URLBaseV1Channels + "/{" + channelIDKey + "}"
@@ -53,8 +51,7 @@ type ChannelManagement interface {
 	JoinChannel(channelID string, configBlock *cb.Block, isAppChannel bool) (types.ChannelInfo, error)
 
 	// RemoveChannel instructs the orderer to remove a channel.
-	// Depending on the removeStorage parameter, the storage resources are either removed or archived.
-	RemoveChannel(channelID string, removeStorage bool) error
+	RemoveChannel(channelID string) error
 }
 
 // HTTPHandler handles all the HTTP requests to the channel participation API.
@@ -73,12 +70,108 @@ func NewHTTPHandler(config localconfig.ChannelParticipation, registrar ChannelMa
 		router:    mux.NewRouter(),
 	}
 
+	// swagger:operation GET /v1/participation/channels/{channelID} channels listChannel
+	// ---
+	// summary: Returns detailed channel information for a specific channel Ordering Service Node (OSN) has joined.
+	// parameters:
+	// - name: channelID
+	//   in: path
+	//   description: Channel ID
+	//   required: true
+	//   type: string
+	// responses:
+	//    '200':
+	//       description: Successfully retrieved channel.
+	//       schema:
+	//         "$ref": "#/definitions/channelInfo"
+	//       headers:
+	//        Content-Type:
+	//          description: The media type of the resource
+	//          type: string
+	//        Cache-Control:
+	//         description: The directives for caching responses
+	//         type: string
+
 	handler.router.HandleFunc(urlWithChannelIDKey, handler.serveListOne).Methods(http.MethodGet)
+
+	// swagger:operation DELETE /v1/participation/channels/{channelID} channels removeChannel
+	// ---
+	// summary: Removes an Ordering Service Node (OSN) from a channel.
+	// parameters:
+	// - name: channelID
+	//   in: path
+	//   description: Channel ID
+	//   required: true
+	//   type: string
+	// responses:
+	//    '204':
+	//      description: Successfully removed channel.
+	//    '400':
+	//      description: Bad request.
+	//    '404':
+	//      description: The channel does not exist.
+	//    '405':
+	//      description: The system channel exists, removal is not allowed.
+	//    '409':
+	//      description: The channel is pending removal.
 
 	handler.router.HandleFunc(urlWithChannelIDKey, handler.serveRemove).Methods(http.MethodDelete)
 	handler.router.HandleFunc(urlWithChannelIDKey, handler.serveNotAllowed)
 
+	// swagger:operation GET /v1/participation/channels channels listChannels
+	// ---
+	// summary: Returns the complete list of channels an Ordering Service Node (OSN) has joined.
+	// responses:
+	//    '200':
+	//       description: Successfully retrieved channels.
+	//       schema:
+	//         "$ref": "#/definitions/channelList"
+	//       headers:
+	//        Content-Type:
+	//          description: The media type of the resource
+	//          type: string
+	//        Cache-Control:
+	//         description: The directives for caching responses
+	//         type: string
+
 	handler.router.HandleFunc(URLBaseV1Channels, handler.serveListAll).Methods(http.MethodGet)
+
+	// swagger:operation POST /v1/participation/channels channels joinChannel
+	// ---
+	// summary: Joins an Ordering Service Node (OSN) to a channel.
+	// description: If a channel does not yet exist, it will be created.
+	// parameters:
+	// - name: configBlock
+	//   in: formData
+	//   type: string
+	//   required: true
+	// responses:
+	//    '201':
+	//      description: Successfully joined channel.
+	//      schema:
+	//        "$ref": "#/definitions/channelInfo"
+	//      headers:
+	//       Content-Type:
+	//         description: The media type of the resource
+	//         type: string
+	//       Location:
+	//        description: The URL to redirect a page to
+	//        type: string
+	//    '400':
+	//      description: Cannot join channel.
+	//    '403':
+	//      description: The client is trying to join the system-channel that does not exist, but application channels exist.
+	//    '405':
+	//      description: |
+	//                   The client is trying to join an app-channel, but the system channel exists.
+	//                   The client is trying to join an app-channel that exists, but the system channel does not.
+	//                   The client is trying to join the system-channel, and it exists.
+	//    '409':
+	//      description: The client is trying to join a channel that is currently being removed.
+	//    '500':
+	//      description: Removal of channel failed.
+	// consumes:
+	//   - multipart/form-data
 
 	handler.router.HandleFunc(URLBaseV1Channels, handler.serveJoin).Methods(http.MethodPost).HeadersRegexp(
 		"Content-Type", "multipart/form-data*")
@@ -169,7 +262,7 @@ func (h *HTTPHandler) serveJoin(resp http.ResponseWriter, req *http.Request) {
 
 	channelID, isAppChannel, err := ValidateJoinBlock(block)
 	if err != nil {
-		h.sendResponseJsonError(resp, http.StatusBadRequest, errors.Wrap(err, "invalid join block"))
+		h.sendResponseJsonError(resp, http.StatusBadRequest, errors.WithMessage(err, "invalid join block"))
 		return
 	}
 
@@ -240,7 +333,7 @@ func (h *HTTPHandler) extractChannelID(req *http.Request, resp http.ResponseWrit
 	}
 
 	if err := configtx.ValidateChannelID(channelID); err != nil {
-		err = errors.Wrap(err, "invalid channel ID")
+		err = errors.WithMessage(err, "invalid channel ID")
 		h.sendResponseJsonError(resp, http.StatusBadRequest, err)
 		return "", err
 	}
@@ -252,21 +345,25 @@ func (h *HTTPHandler) sendJoinError(err error, resp http.ResponseWriter) {
 	switch err {
 	case types.ErrSystemChannelExists:
 		// The client is trying to join an app-channel, but the system channel exists: only GET is allowed on app channels.
-		h.sendResponseNotAllowed(resp, errors.Wrap(err, "cannot join"), http.MethodGet)
+		h.sendResponseNotAllowed(resp, errors.WithMessage(err, "cannot join"), http.MethodGet)
 	case types.ErrChannelAlreadyExists:
 		// The client is trying to join an app-channel that exists, but the system channel does not;
 		// The client is trying to join the system-channel, and it exists. GET & DELETE are allowed on the channel.
-		h.sendResponseNotAllowed(resp, errors.Wrap(err, "cannot join"), http.MethodGet, http.MethodDelete)
+		h.sendResponseNotAllowed(resp, errors.WithMessage(err, "cannot join"), http.MethodGet, http.MethodDelete)
 	case types.ErrAppChannelsAlreadyExists:
 		// The client is trying to join the system-channel that does not exist, but app channels exist.
-		h.sendResponseJsonError(resp, http.StatusForbidden, errors.Wrap(err, "cannot join"))
+		h.sendResponseJsonError(resp, http.StatusForbidden, errors.WithMessage(err, "cannot join"))
+	case types.ErrChannelPendingRemoval:
+		// The client is trying to join a channel that is currently being removed.
+		h.sendResponseJsonError(resp, http.StatusConflict, errors.WithMessage(err, "cannot join"))
+	case types.ErrChannelRemovalFailure:
+		h.sendResponseJsonError(resp, http.StatusInternalServerError, errors.WithMessage(err, "cannot join"))
 	default:
-		h.sendResponseJsonError(resp, http.StatusBadRequest, errors.Wrap(err, "cannot join"))
+		h.sendResponseJsonError(resp, http.StatusBadRequest, errors.WithMessage(err, "cannot join"))
 	}
 }
 
 // Remove a channel
-// Expecting an optional query: "removeStorage=true" or "removeStorage=false".
 func (h *HTTPHandler) serveRemove(resp http.ResponseWriter, req *http.Request) {
 	_, err := negotiateContentType(req) // Only application/json responses for now
 	if err != nil {
@@ -279,12 +376,7 @@ func (h *HTTPHandler) serveRemove(resp http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	removeStorage, err := h.extractRemoveStorageQuery(req, resp)
-	if err != nil {
-		return
-	}
-
-	err = h.registrar.RemoveChannel(channelID, removeStorage)
+	err = h.registrar.RemoveChannel(channelID)
 	if err == nil {
 		h.logger.Debugf("Successfully removed channel: %s", channelID)
 		resp.WriteHeader(http.StatusNoContent)
@@ -295,41 +387,14 @@ func (h *HTTPHandler) serveRemove(resp http.ResponseWriter, req *http.Request) {
 
 	switch err {
 	case types.ErrSystemChannelExists:
-		h.sendResponseNotAllowed(resp, errors.Wrap(err, "cannot remove"), http.MethodGet)
+		h.sendResponseNotAllowed(resp, errors.WithMessage(err, "cannot remove"), http.MethodGet)
 	case types.ErrChannelNotExist:
-		h.sendResponseJsonError(resp, http.StatusNotFound, errors.Wrap(err, "cannot remove"))
+		h.sendResponseJsonError(resp, http.StatusNotFound, errors.WithMessage(err, "cannot remove"))
+	case types.ErrChannelPendingRemoval:
+		h.sendResponseJsonError(resp, http.StatusConflict, errors.WithMessage(err, "cannot remove"))
 	default:
-		h.sendResponseJsonError(resp, http.StatusBadRequest, errors.Wrap(err, "cannot remove"))
+		h.sendResponseJsonError(resp, http.StatusBadRequest, errors.WithMessage(err, "cannot remove"))
 	}
-}
-
-func (h *HTTPHandler) extractRemoveStorageQuery(req *http.Request, resp http.ResponseWriter) (bool, error) {
-	removeStorage := h.config.RemoveStorage
-	queryVal := req.URL.Query()
-	if len(queryVal) > 1 {
-		err := errors.New("cannot remove: too many query keys")
-		h.sendResponseJsonError(resp, http.StatusBadRequest, err)
-		return false, err
-	}
-	if values, ok := queryVal[RemoveStorageQueryKey]; ok {
-		var err error
-		if len(values) != 1 {
-			err = errors.New("cannot remove: too many query parameters")
-			h.sendResponseJsonError(resp, http.StatusBadRequest, err)
-			return false, err
-		}
-
-		removeStorage, err = strconv.ParseBool(values[0])
-		if err != nil {
-			h.sendResponseJsonError(resp, http.StatusBadRequest, errors.Wrap(err, "cannot remove: invalid query parameter"))
-			return false, err
-		}
-	} else if len(queryVal) > 0 {
-		err := errors.New("cannot remove: invalid query key")
-		h.sendResponseJsonError(resp, http.StatusBadRequest, err)
-		return false, err
-	}
-	return removeStorage, nil
 }
 
 func (h *HTTPHandler) serveBadContentType(resp http.ResponseWriter, req *http.Request) {

@@ -29,6 +29,7 @@ type TopLevel struct {
 	Operations           Operations
 	Metrics              Metrics
 	ChannelParticipation ChannelParticipation
+	Admin                Admin
 }
 
 // General contains config which should be common among all orderer types.
@@ -198,11 +199,16 @@ type Statsd struct {
 	Prefix        string
 }
 
+// Admin configures the admin endpoint for the orderer.
+type Admin struct {
+	ListenAddress string
+	TLS           TLS
+}
+
 // ChannelParticipation provides the channel participation API configuration for the orderer.
 // Channel participation uses the same ListenAddress and TLS settings of the Operations service.
 type ChannelParticipation struct {
 	Enabled            bool
-	RemoveStorage      bool // Whether to permanently remove storage on channel removal.
 	MaxRequestBodySize uint32
 }
 
@@ -282,8 +288,10 @@ var Defaults = TopLevel{
 	},
 	ChannelParticipation: ChannelParticipation{
 		Enabled:            false,
-		RemoveStorage:      false,
 		MaxRequestBodySize: 1024 * 1024,
+	},
+	Admin: Admin{
+		ListenAddress: "127.0.0.1:0",
 	},
 }
 
@@ -477,6 +485,9 @@ func (c *TopLevel) completeInitialization(configDir string) {
 		case c.Kafka.Version == sarama.KafkaVersion{}:
 			logger.Infof("Kafka.Version unset, setting to %v", Defaults.Kafka.Version)
 			c.Kafka.Version = Defaults.Kafka.Version
+
+		case c.Admin.TLS.Enabled && !c.Admin.TLS.ClientAuthRequired:
+			logger.Panic("Admin.TLS.ClientAuthRequired must be set to true if Admin.TLS.Enabled is set to true")
 
 		default:
 			return

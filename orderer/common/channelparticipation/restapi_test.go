@@ -29,15 +29,14 @@ import (
 
 func TestNewHTTPHandler(t *testing.T) {
 	config := localconfig.ChannelParticipation{
-		Enabled:       false,
-		RemoveStorage: false,
+		Enabled: false,
 	}
 	h := channelparticipation.NewHTTPHandler(config, &mocks.ChannelManagement{})
 	require.NotNilf(t, h, "cannot create handler")
 }
 
 func TestHTTPHandler_ServeHTTP_Disabled(t *testing.T) {
-	config := localconfig.ChannelParticipation{Enabled: false, RemoveStorage: false}
+	config := localconfig.ChannelParticipation{Enabled: false}
 	_, h := setup(config, t)
 
 	resp := httptest.NewRecorder()
@@ -47,7 +46,7 @@ func TestHTTPHandler_ServeHTTP_Disabled(t *testing.T) {
 }
 
 func TestHTTPHandler_ServeHTTP_InvalidMethods(t *testing.T) {
-	config := localconfig.ChannelParticipation{Enabled: true, RemoveStorage: false}
+	config := localconfig.ChannelParticipation{Enabled: true}
 	_, h := setup(config, t)
 	invalidMethods := []string{http.MethodConnect, http.MethodHead, http.MethodOptions, http.MethodPatch, http.MethodPut, http.MethodTrace}
 
@@ -75,7 +74,7 @@ func TestHTTPHandler_ServeHTTP_InvalidMethods(t *testing.T) {
 }
 
 func TestHTTPHandler_ServeHTTP_ListErrors(t *testing.T) {
-	config := localconfig.ChannelParticipation{Enabled: true, RemoveStorage: false}
+	config := localconfig.ChannelParticipation{Enabled: true}
 	_, h := setup(config, t)
 
 	t.Run("bad base", func(t *testing.T) {
@@ -116,7 +115,7 @@ func TestHTTPHandler_ServeHTTP_ListErrors(t *testing.T) {
 }
 
 func TestHTTPHandler_ServeHTTP_ListAll(t *testing.T) {
-	config := localconfig.ChannelParticipation{Enabled: true, RemoveStorage: false}
+	config := localconfig.ChannelParticipation{Enabled: true}
 	fakeManager, h := setup(config, t)
 
 	t.Run("two channels", func(t *testing.T) {
@@ -201,16 +200,16 @@ func TestHTTPHandler_ServeHTTP_ListAll(t *testing.T) {
 }
 
 func TestHTTPHandler_ServeHTTP_ListSingle(t *testing.T) {
-	config := localconfig.ChannelParticipation{Enabled: true, RemoveStorage: false}
+	config := localconfig.ChannelParticipation{Enabled: true}
 	fakeManager, h := setup(config, t)
 	require.NotNilf(t, h, "cannot create handler")
 
 	t.Run("channel exists", func(t *testing.T) {
 		fakeManager.ChannelInfoReturns(types.ChannelInfo{
-			Name:            "app-channel",
-			ClusterRelation: "member",
-			Status:          "active",
-			Height:          3,
+			Name:              "app-channel",
+			ConsensusRelation: "consenter",
+			Status:            "active",
+			Height:            3,
 		}, nil)
 		resp := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, channelparticipation.URLBaseV1Channels+"/app-channel", nil)
@@ -223,11 +222,11 @@ func TestHTTPHandler_ServeHTTP_ListSingle(t *testing.T) {
 		err := json.Unmarshal(resp.Body.Bytes(), &infoResp)
 		require.NoError(t, err, "cannot be unmarshaled")
 		require.Equal(t, types.ChannelInfo{
-			Name:            "app-channel",
-			URL:             channelparticipation.URLBaseV1Channels + "/app-channel",
-			ClusterRelation: "member",
-			Status:          "active",
-			Height:          3,
+			Name:              "app-channel",
+			URL:               channelparticipation.URLBaseV1Channels + "/app-channel",
+			ConsensusRelation: "consenter",
+			Status:            "active",
+			Height:            3,
 		}, infoResp)
 
 	})
@@ -244,17 +243,16 @@ func TestHTTPHandler_ServeHTTP_ListSingle(t *testing.T) {
 func TestHTTPHandler_ServeHTTP_Join(t *testing.T) {
 	config := localconfig.ChannelParticipation{
 		Enabled:            true,
-		RemoveStorage:      false,
 		MaxRequestBodySize: 1024 * 1024,
 	}
 
 	t.Run("created ok", func(t *testing.T) {
 		fakeManager, h := setup(config, t)
 		fakeManager.JoinChannelReturns(types.ChannelInfo{
-			Name:            "app-channel",
-			ClusterRelation: "member",
-			Status:          "active",
-			Height:          1,
+			Name:              "app-channel",
+			ConsensusRelation: "consenter",
+			Status:            "active",
+			Height:            1,
 		}, nil)
 
 		resp := httptest.NewRecorder()
@@ -267,11 +265,11 @@ func TestHTTPHandler_ServeHTTP_Join(t *testing.T) {
 		err := json.Unmarshal(resp.Body.Bytes(), &infoResp)
 		require.NoError(t, err, "cannot be unmarshaled")
 		require.Equal(t, types.ChannelInfo{
-			Name:            "app-channel",
-			URL:             channelparticipation.URLBaseV1Channels + "/app-channel",
-			ClusterRelation: "member",
-			Status:          "active",
-			Height:          1,
+			Name:              "app-channel",
+			URL:               channelparticipation.URLBaseV1Channels + "/app-channel",
+			ConsensusRelation: "consenter",
+			Status:            "active",
+			Height:            1,
 		}, infoResp)
 	})
 
@@ -302,6 +300,15 @@ func TestHTTPHandler_ServeHTTP_Join(t *testing.T) {
 		req := genJoinRequestFormData(t, validBlockBytes("ch-id"))
 		h.ServeHTTP(resp, req)
 		checkErrorResponse(t, http.StatusForbidden, "cannot join: application channels already exist", resp)
+	})
+
+	t.Run("Error: Channel Pending Removal", func(t *testing.T) {
+		fakeManager, h := setup(config, t)
+		fakeManager.JoinChannelReturns(types.ChannelInfo{}, types.ErrChannelPendingRemoval)
+		resp := httptest.NewRecorder()
+		req := genJoinRequestFormData(t, validBlockBytes("ch-id"))
+		h.ServeHTTP(resp, req)
+		checkErrorResponse(t, http.StatusConflict, "cannot join: channel pending removal", resp)
 	})
 
 	t.Run("bad body - not a block", func(t *testing.T) {
@@ -403,13 +410,12 @@ func TestHTTPHandler_ServeHTTP_Join(t *testing.T) {
 }
 
 func TestHTTPHandler_ServeHTTP_Remove(t *testing.T) {
-	config := localconfig.ChannelParticipation{Enabled: true, RemoveStorage: false}
+	config := localconfig.ChannelParticipation{Enabled: true}
 	fakeManager, h := setup(config, t)
 
 	type testDef struct {
 		name         string
 		channel      string
-		query        string
 		fakeReturns  error
 		expectedCode int
 		expectedErr  error
@@ -417,25 +423,8 @@ func TestHTTPHandler_ServeHTTP_Remove(t *testing.T) {
 
 	testCases := []testDef{
 		{
-			name:         "success - no query",
+			name:         "success",
 			channel:      "my-channel",
-			query:        "",
-			fakeReturns:  nil,
-			expectedCode: http.StatusNoContent,
-			expectedErr:  nil,
-		},
-		{
-			name:         "success - query - false",
-			channel:      "my-channel",
-			query:        channelparticipation.RemoveStorageQueryKey + "=false",
-			fakeReturns:  nil,
-			expectedCode: http.StatusNoContent,
-			expectedErr:  nil,
-		},
-		{
-			name:         "success - query - true",
-			channel:      "my-channel",
-			query:        channelparticipation.RemoveStorageQueryKey + "=true",
 			fakeReturns:  nil,
 			expectedCode: http.StatusNoContent,
 			expectedErr:  nil,
@@ -443,7 +432,6 @@ func TestHTTPHandler_ServeHTTP_Remove(t *testing.T) {
 		{
 			name:         "bad channel ID",
 			channel:      "My-Channel",
-			query:        "",
 			fakeReturns:  nil,
 			expectedCode: http.StatusBadRequest,
 			expectedErr:  errors.New("invalid channel ID: 'My-Channel' contains illegal characters"),
@@ -451,47 +439,13 @@ func TestHTTPHandler_ServeHTTP_Remove(t *testing.T) {
 		{
 			name:         "channel does not exist",
 			channel:      "my-channel",
-			query:        "",
 			fakeReturns:  types.ErrChannelNotExist,
 			expectedCode: http.StatusNotFound,
 			expectedErr:  errors.Wrap(types.ErrChannelNotExist, "cannot remove"),
 		},
 		{
-			name:         "bad query - invalid key",
-			channel:      "my-channel",
-			query:        "bogus=false",
-			fakeReturns:  nil,
-			expectedCode: http.StatusBadRequest,
-			expectedErr:  errors.New("cannot remove: invalid query key"),
-		},
-		{
-			name:         "bad query - too many keys",
-			channel:      "my-channel",
-			query:        "bogus=false&stupid=true",
-			fakeReturns:  nil,
-			expectedCode: http.StatusBadRequest,
-			expectedErr:  errors.New("cannot remove: too many query keys"),
-		},
-		{
-			name:         "bad query - value",
-			channel:      "my-channel",
-			query:        channelparticipation.RemoveStorageQueryKey + "=10",
-			fakeReturns:  nil,
-			expectedCode: http.StatusBadRequest,
-			expectedErr:  errors.New("cannot remove: invalid query parameter: strconv.ParseBool: parsing \"10\": invalid syntax"),
-		},
-		{
-			name:         "bad query - too many parameters",
-			channel:      "my-channel",
-			query:        channelparticipation.RemoveStorageQueryKey + "=true&" + channelparticipation.RemoveStorageQueryKey + "=false",
-			fakeReturns:  nil,
-			expectedCode: http.StatusBadRequest,
-			expectedErr:  errors.New("cannot remove: too many query parameters"),
-		},
-		{
 			name:         "some other error",
 			channel:      "my-channel",
-			query:        "",
 			fakeReturns:  os.ErrInvalid,
 			expectedCode: http.StatusBadRequest,
 			expectedErr:  errors.Wrap(os.ErrInvalid, "cannot remove"),
@@ -502,7 +456,7 @@ func TestHTTPHandler_ServeHTTP_Remove(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			fakeManager.RemoveChannelReturns(testCase.fakeReturns)
 			resp := httptest.NewRecorder()
-			target := path.Join(channelparticipation.URLBaseV1Channels, testCase.channel) + "?" + testCase.query
+			target := path.Join(channelparticipation.URLBaseV1Channels, testCase.channel)
 			req := httptest.NewRequest(http.MethodDelete, target, nil)
 			h.ServeHTTP(resp, req)
 
@@ -524,6 +478,16 @@ func TestHTTPHandler_ServeHTTP_Remove(t *testing.T) {
 		checkErrorResponse(t, http.StatusMethodNotAllowed, "cannot remove: system channel exists", resp)
 		require.Equal(t, "GET", resp.Result().Header.Get("Allow"))
 	})
+
+	t.Run("Error: Channel Pending Removal", func(t *testing.T) {
+		fakeManager, h := setup(config, t)
+		fakeManager.RemoveChannelReturns(types.ErrChannelPendingRemoval)
+		resp := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodDelete, path.Join(channelparticipation.URLBaseV1Channels, "my-channel"), nil)
+		h.ServeHTTP(resp, req)
+		checkErrorResponse(t, http.StatusConflict, "cannot remove: channel pending removal", resp)
+	})
+
 }
 
 func setup(config localconfig.ChannelParticipation, t *testing.T) (*mocks.ChannelManagement, *channelparticipation.HTTPHandler) {

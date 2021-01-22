@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric-protos-go/common"
@@ -342,7 +343,7 @@ func TestLedgerCreationFailure(t *testing.T) {
 	require.NoError(t, err)
 	genesisBlock.Header.Number = 1 // should cause an error during ledger creation
 	_, err = provider.CreateFromGenesisBlock(genesisBlock)
-	require.EqualError(t, err, "Expected block number=0, received block number=1")
+	require.EqualError(t, err, "expected block number=0, received block number=1")
 
 	verifyLedgerDoesNotExist(t, provider, ledgerID)
 }
@@ -362,7 +363,7 @@ func TestLedgerCreationFailureDuringLedgerDeletion(t *testing.T) {
 
 	provider.dbProvider.Close()
 	_, err = provider.CreateFromGenesisBlock(genesisBlock)
-	require.Contains(t, err.Error(), "Expected block number=0, received block number=1: error while deleting data from ledger [testLedger]")
+	require.Contains(t, err.Error(), "expected block number=0, received block number=1: error while deleting data from ledger [testLedger]")
 
 	verifyLedgerIDExists(t, provider, ledgerID, msgs.Status_UNDER_CONSTRUCTION)
 }
@@ -428,9 +429,10 @@ func TestLedgerBackup(t *testing.T) {
 		RootFSPath:    originalPath,
 		StateDBConfig: &lgr.StateDBConfig{},
 		PrivateDataConfig: &lgr.PrivateDataConfig{
-			MaxBatchSize:    5000,
-			BatchesInterval: 1000,
-			PurgeInterval:   100,
+			MaxBatchSize:                        5000,
+			BatchesInterval:                     1000,
+			PurgeInterval:                       100,
+			DeprioritizedDataReconcilerInterval: 120 * time.Minute,
 		},
 		HistoryDBConfig: &lgr.HistoryDBConfig{
 			Enabled: true,
@@ -481,9 +483,10 @@ func TestLedgerBackup(t *testing.T) {
 		RootFSPath:    restorePath,
 		StateDBConfig: &lgr.StateDBConfig{},
 		PrivateDataConfig: &lgr.PrivateDataConfig{
-			MaxBatchSize:    5000,
-			BatchesInterval: 1000,
-			PurgeInterval:   100,
+			MaxBatchSize:                        5000,
+			BatchesInterval:                     1000,
+			PurgeInterval:                       100,
+			DeprioritizedDataReconcilerInterval: 120 * time.Minute,
 		},
 		HistoryDBConfig: &lgr.HistoryDBConfig{
 			Enabled: true,
@@ -571,9 +574,10 @@ func testConfig(t *testing.T) (conf *lgr.Config, cleanup func()) {
 		RootFSPath:    path,
 		StateDBConfig: &lgr.StateDBConfig{},
 		PrivateDataConfig: &lgr.PrivateDataConfig{
-			MaxBatchSize:    5000,
-			BatchesInterval: 1000,
-			PurgeInterval:   100,
+			MaxBatchSize:                        5000,
+			BatchesInterval:                     1000,
+			PurgeInterval:                       100,
+			DeprioritizedDataReconcilerInterval: 120 * time.Minute,
 		},
 		HistoryDBConfig: &lgr.HistoryDBConfig{
 			Enabled: true,
@@ -601,6 +605,7 @@ func testutilNewProvider(conf *lgr.Config, t *testing.T, ccInfoProvider *mock.De
 			HashProvider:                    cryptoProvider,
 			HealthCheckRegistry:             &mock.HealthCheckRegistry{},
 			ChaincodeLifecycleEventProvider: &mock.ChaincodeLifecycleEventProvider{},
+			MembershipInfoProvider:          &mock.MembershipInfoProvider{},
 		},
 	)
 	require.NoError(t, err, "Failed to create new Provider")
@@ -678,11 +683,11 @@ func verifyLedgerDoesNotExist(t *testing.T, provider *Provider, ledgerID string)
 
 	db, err := provider.dbProvider.GetDBHandle(ledgerID, nil)
 	require.NoError(t, err)
-	itr, _, err := db.GetFullScanIterator(func(string) bool { return false })
+	itr, err := db.GetFullScanIterator(func(string) bool { return false })
 	require.NoError(t, err)
-	k, _, err := itr.Next()
+	kv, err := itr.Next()
 	require.NoError(t, err)
-	require.Nil(t, k)
+	require.Nil(t, kv)
 	sp, err := db.GetLatestSavePoint()
 	require.NoError(t, err)
 	require.Nil(t, sp)

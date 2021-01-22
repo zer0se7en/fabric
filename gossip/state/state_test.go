@@ -253,7 +253,10 @@ func (*mockCommitter) GetMissingPvtDataTracker() (ledger.MissingPvtDataTracker, 
 	panic("implement me")
 }
 
-func (*mockCommitter) CommitPvtDataOfOldBlocks(reconciledPvtdata []*ledger.ReconciledPvtdata) ([]*ledger.PvtdataHashMismatch, error) {
+func (*mockCommitter) CommitPvtDataOfOldBlocks(
+	reconciledPvtdata []*ledger.ReconciledPvtdata,
+	unreconciled ledger.MissingPvtDataInfo,
+) ([]*ledger.PvtdataHashMismatch, error) {
 	panic("implement me")
 }
 
@@ -269,7 +272,10 @@ func (mock *ramLedger) GetMissingPvtDataTracker() (ledger.MissingPvtDataTracker,
 	panic("implement me")
 }
 
-func (mock *ramLedger) CommitPvtDataOfOldBlocks(reconciledPvtdata []*ledger.ReconciledPvtdata) ([]*ledger.PvtdataHashMismatch, error) {
+func (mock *ramLedger) CommitPvtDataOfOldBlocks(
+	reconciledPvtdata []*ledger.ReconciledPvtdata,
+	unreconciled ledger.MissingPvtDataInfo,
+) ([]*ledger.PvtdataHashMismatch, error) {
 	panic("implement me")
 }
 
@@ -476,6 +482,61 @@ func newBootNode(id int, committer committer.Committer, acceptor peerIdentityAcc
 	gossipMetrics := metrics.NewGossipMetrics(&disabled.Provider{})
 	logger := flogging.MustGetLogger(gutil.StateLogger)
 	return newPeerNodeWithGossipWithValidatorWithMetrics(logger, id, committer, acceptor, nil, v, gossipMetrics)
+}
+
+func TestStraggler(t *testing.T) {
+	for _, testCase := range []struct {
+		stateEnabled   bool
+		orgLeader      bool
+		leaderElection bool
+		height         uint64
+		receivedSeq    uint64
+		expected       bool
+	}{
+		{
+			height:         100,
+			receivedSeq:    300,
+			leaderElection: true,
+			expected:       true,
+		},
+		{
+			height:      100,
+			receivedSeq: 300,
+			expected:    true,
+		},
+		{
+			height:      100,
+			receivedSeq: 300,
+			orgLeader:   true,
+		},
+		{
+			height:         100,
+			receivedSeq:    105,
+			leaderElection: true,
+		},
+		{
+			height:         100,
+			receivedSeq:    300,
+			leaderElection: true,
+			stateEnabled:   true,
+		},
+	} {
+		description := fmt.Sprintf("%+v", testCase)
+		t.Run(description, func(t *testing.T) {
+			s := &GossipStateProviderImpl{
+				config: &StateConfig{
+					StateEnabled:      testCase.stateEnabled,
+					OrgLeader:         testCase.orgLeader,
+					UseLeaderElection: testCase.leaderElection,
+				},
+			}
+
+			s.straggler(testCase.height, &proto.Payload{
+				SeqNum: testCase.receivedSeq,
+			})
+		})
+	}
+
 }
 
 func TestNilDirectMsg(t *testing.T) {

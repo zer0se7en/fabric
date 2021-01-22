@@ -3,16 +3,19 @@ package mock
 
 import (
 	"sync"
+
+	"github.com/hyperledger/fabric/core/ledger/internal/version"
 )
 
 type SnapshotPvtdataHashesConsumer struct {
-	ConsumeSnapshotDataStub        func(string, string, []byte, []byte) error
+	ConsumeSnapshotDataStub        func(string, string, []byte, []byte, *version.Height) error
 	consumeSnapshotDataMutex       sync.RWMutex
 	consumeSnapshotDataArgsForCall []struct {
 		arg1 string
 		arg2 string
 		arg3 []byte
 		arg4 []byte
+		arg5 *version.Height
 	}
 	consumeSnapshotDataReturns struct {
 		result1 error
@@ -20,11 +23,21 @@ type SnapshotPvtdataHashesConsumer struct {
 	consumeSnapshotDataReturnsOnCall map[int]struct {
 		result1 error
 	}
+	DoneStub        func() error
+	doneMutex       sync.RWMutex
+	doneArgsForCall []struct {
+	}
+	doneReturns struct {
+		result1 error
+	}
+	doneReturnsOnCall map[int]struct {
+		result1 error
+	}
 	invocations      map[string][][]interface{}
 	invocationsMutex sync.RWMutex
 }
 
-func (fake *SnapshotPvtdataHashesConsumer) ConsumeSnapshotData(arg1 string, arg2 string, arg3 []byte, arg4 []byte) error {
+func (fake *SnapshotPvtdataHashesConsumer) ConsumeSnapshotData(arg1 string, arg2 string, arg3 []byte, arg4 []byte, arg5 *version.Height) error {
 	var arg3Copy []byte
 	if arg3 != nil {
 		arg3Copy = make([]byte, len(arg3))
@@ -42,11 +55,12 @@ func (fake *SnapshotPvtdataHashesConsumer) ConsumeSnapshotData(arg1 string, arg2
 		arg2 string
 		arg3 []byte
 		arg4 []byte
-	}{arg1, arg2, arg3Copy, arg4Copy})
-	fake.recordInvocation("ConsumeSnapshotData", []interface{}{arg1, arg2, arg3Copy, arg4Copy})
+		arg5 *version.Height
+	}{arg1, arg2, arg3Copy, arg4Copy, arg5})
+	fake.recordInvocation("ConsumeSnapshotData", []interface{}{arg1, arg2, arg3Copy, arg4Copy, arg5})
 	fake.consumeSnapshotDataMutex.Unlock()
 	if fake.ConsumeSnapshotDataStub != nil {
-		return fake.ConsumeSnapshotDataStub(arg1, arg2, arg3, arg4)
+		return fake.ConsumeSnapshotDataStub(arg1, arg2, arg3, arg4, arg5)
 	}
 	if specificReturn {
 		return ret.result1
@@ -61,17 +75,17 @@ func (fake *SnapshotPvtdataHashesConsumer) ConsumeSnapshotDataCallCount() int {
 	return len(fake.consumeSnapshotDataArgsForCall)
 }
 
-func (fake *SnapshotPvtdataHashesConsumer) ConsumeSnapshotDataCalls(stub func(string, string, []byte, []byte) error) {
+func (fake *SnapshotPvtdataHashesConsumer) ConsumeSnapshotDataCalls(stub func(string, string, []byte, []byte, *version.Height) error) {
 	fake.consumeSnapshotDataMutex.Lock()
 	defer fake.consumeSnapshotDataMutex.Unlock()
 	fake.ConsumeSnapshotDataStub = stub
 }
 
-func (fake *SnapshotPvtdataHashesConsumer) ConsumeSnapshotDataArgsForCall(i int) (string, string, []byte, []byte) {
+func (fake *SnapshotPvtdataHashesConsumer) ConsumeSnapshotDataArgsForCall(i int) (string, string, []byte, []byte, *version.Height) {
 	fake.consumeSnapshotDataMutex.RLock()
 	defer fake.consumeSnapshotDataMutex.RUnlock()
 	argsForCall := fake.consumeSnapshotDataArgsForCall[i]
-	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3, argsForCall.arg4
+	return argsForCall.arg1, argsForCall.arg2, argsForCall.arg3, argsForCall.arg4, argsForCall.arg5
 }
 
 func (fake *SnapshotPvtdataHashesConsumer) ConsumeSnapshotDataReturns(result1 error) {
@@ -97,11 +111,65 @@ func (fake *SnapshotPvtdataHashesConsumer) ConsumeSnapshotDataReturnsOnCall(i in
 	}{result1}
 }
 
+func (fake *SnapshotPvtdataHashesConsumer) Done() error {
+	fake.doneMutex.Lock()
+	ret, specificReturn := fake.doneReturnsOnCall[len(fake.doneArgsForCall)]
+	fake.doneArgsForCall = append(fake.doneArgsForCall, struct {
+	}{})
+	fake.recordInvocation("Done", []interface{}{})
+	fake.doneMutex.Unlock()
+	if fake.DoneStub != nil {
+		return fake.DoneStub()
+	}
+	if specificReturn {
+		return ret.result1
+	}
+	fakeReturns := fake.doneReturns
+	return fakeReturns.result1
+}
+
+func (fake *SnapshotPvtdataHashesConsumer) DoneCallCount() int {
+	fake.doneMutex.RLock()
+	defer fake.doneMutex.RUnlock()
+	return len(fake.doneArgsForCall)
+}
+
+func (fake *SnapshotPvtdataHashesConsumer) DoneCalls(stub func() error) {
+	fake.doneMutex.Lock()
+	defer fake.doneMutex.Unlock()
+	fake.DoneStub = stub
+}
+
+func (fake *SnapshotPvtdataHashesConsumer) DoneReturns(result1 error) {
+	fake.doneMutex.Lock()
+	defer fake.doneMutex.Unlock()
+	fake.DoneStub = nil
+	fake.doneReturns = struct {
+		result1 error
+	}{result1}
+}
+
+func (fake *SnapshotPvtdataHashesConsumer) DoneReturnsOnCall(i int, result1 error) {
+	fake.doneMutex.Lock()
+	defer fake.doneMutex.Unlock()
+	fake.DoneStub = nil
+	if fake.doneReturnsOnCall == nil {
+		fake.doneReturnsOnCall = make(map[int]struct {
+			result1 error
+		})
+	}
+	fake.doneReturnsOnCall[i] = struct {
+		result1 error
+	}{result1}
+}
+
 func (fake *SnapshotPvtdataHashesConsumer) Invocations() map[string][][]interface{} {
 	fake.invocationsMutex.RLock()
 	defer fake.invocationsMutex.RUnlock()
 	fake.consumeSnapshotDataMutex.RLock()
 	defer fake.consumeSnapshotDataMutex.RUnlock()
+	fake.doneMutex.RLock()
+	defer fake.doneMutex.RUnlock()
 	copiedInvocations := map[string][][]interface{}{}
 	for key, value := range fake.invocations {
 		copiedInvocations[key] = value

@@ -86,7 +86,7 @@ type DiscoveryConfig struct {
 
 // NewDiscoveryService returns a new discovery service with the comm module passed and the crypto service passed
 func NewDiscoveryService(self NetworkMember, comm CommService, crypt CryptoService, disPol DisclosurePolicy,
-	config DiscoveryConfig, anchorPeerTracker AnchorPeerTracker) Discovery {
+	config DiscoveryConfig, anchorPeerTracker AnchorPeerTracker, logger util.Logger) Discovery {
 	d := &gossipDiscoveryImpl{
 		self:             self,
 		incTime:          uint64(time.Now().UnixNano()),
@@ -100,7 +100,7 @@ func NewDiscoveryService(self NetworkMember, comm CommService, crypt CryptoServi
 		comm:             comm,
 		lock:             &sync.RWMutex{},
 		toDieChan:        make(chan struct{}),
-		logger:           util.GetLogger(util.DiscoveryLogger, self.InternalEndpoint),
+		logger:           logger,
 		disclosurePolicy: disPol,
 		pubsub:           util.NewPubSub(),
 
@@ -230,16 +230,7 @@ func (d *gossipDiscoveryImpl) InitiateSync(peerNum int) {
 		return
 	}
 	var peers2SendTo []*NetworkMember
-	m, err := d.createMembershipRequest(true)
-	if err != nil {
-		d.logger.Warningf("Failed creating membership request: %+v", errors.WithStack(err))
-		return
-	}
-	memReq, err := protoext.NoopSign(m)
-	if err != nil {
-		d.logger.Warningf("Failed creating SignedGossipMessage: %+v", errors.WithStack(err))
-		return
-	}
+
 	d.lock.RLock()
 
 	n := d.aliveMembership.Size()
@@ -265,6 +256,22 @@ func (d *gossipDiscoveryImpl) InitiateSync(peerNum int) {
 	}
 
 	d.lock.RUnlock()
+
+	if len(peers2SendTo) == 0 {
+		d.logger.Debugf("No peers to send to, aborting membership sync")
+		return
+	}
+
+	m, err := d.createMembershipRequest(true)
+	if err != nil {
+		d.logger.Warningf("Failed creating membership request: %+v", errors.WithStack(err))
+		return
+	}
+	memReq, err := protoext.NoopSign(m)
+	if err != nil {
+		d.logger.Warningf("Failed creating SignedGossipMessage: %+v", errors.WithStack(err))
+		return
+	}
 
 	for _, netMember := range peers2SendTo {
 		d.comm.SendToPeer(netMember, memReq)
@@ -755,6 +762,10 @@ func (d *gossipDiscoveryImpl) periodicalSendAlive() {
 	for !d.toDie() {
 		d.logger.Debug("Sleeping", d.aliveTimeInterval)
 		time.Sleep(d.aliveTimeInterval)
+		if d.aliveMembership.Size() == 0 {
+			d.logger.Debugf("Empty membership, no one to send a heartbeat to")
+			continue
+		}
 		msg, err := d.createSignedAliveMessage(true)
 		if err != nil {
 			d.logger.Warningf("Failed creating alive message: %+v", errors.WithStack(err))
@@ -858,11 +869,7 @@ func (d *gossipDiscoveryImpl) learnExistingMembers(aliveArr []*protoext.SignedGo
 			alive.lastSeen = time.Now()
 			alive.seqNum = am.Timestamp.SeqNum
 
-			if am := d.aliveMembership.MsgByID(m.GetAliveMsg().Membership.PkiId); am == nil {
-				d.logger.Debug("Adding", am, "to aliveMembership")
-				msg := &protoext.SignedGossipMessage{GossipMessage: m.GossipMessage, Envelope: am.Envelope}
-				d.aliveMembership.Put(m.GetAliveMsg().Membership.PkiId, msg)
-			} else {
+			if am := d.aliveMembership.MsgByID(m.GetAliveMsg().Membership.PkiId); am != nil {
 				d.logger.Debug("Replacing", am, "in aliveMembership")
 				am.GossipMessage = m.GossipMessage
 				am.Envelope = m.Envelope

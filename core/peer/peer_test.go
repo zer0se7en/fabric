@@ -14,8 +14,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 
 	"github.com/hyperledger/fabric-protos-go/common"
+	pb "github.com/hyperledger/fabric-protos-go/peer"
 	"github.com/hyperledger/fabric/bccsp/sw"
 	configtxtest "github.com/hyperledger/fabric/common/configtx/test"
 	"github.com/hyperledger/fabric/common/metrics/disabled"
@@ -219,6 +221,78 @@ func TestCreateChannel(t *testing.T) {
 	if len(channels) != 1 {
 		t.Fatalf("incorrect number of channels")
 	}
+}
+
+func TestCreateChannelBySnapshot(t *testing.T) {
+	peerInstance, cleanup := NewTestPeer(t)
+	defer cleanup()
+
+	var initArg string
+	waitCh := make(chan struct{})
+	peerInstance.Initialize(
+		func(cid string) {
+			<-waitCh
+			initArg = cid
+		},
+		nil,
+		plugin.MapBasedMapper(map[string]validation.PluginFactory{}),
+		&ledgermocks.DeployedChaincodeInfoProvider{},
+		nil,
+		nil,
+		runtime.NumCPU(),
+	)
+
+	testChannelID := "createchannelbysnapshot"
+
+	// create a temp dir to store snapshot
+	tempdir, err := ioutil.TempDir("", testChannelID)
+	require.NoError(t, err)
+	defer os.Remove(tempdir)
+
+	snapshotDir := ledgermgmttest.CreateSnapshotWithGenesisBlock(t, tempdir, testChannelID, &ConfigTxProcessor{})
+	err = peerInstance.CreateChannelFromSnapshot(snapshotDir, &mock.DeployedChaincodeInfoProvider{}, nil, nil)
+	require.NoError(t, err)
+
+	expectedStatus := &pb.JoinBySnapshotStatus{InProgress: true, BootstrappingSnapshotDir: snapshotDir}
+	require.Equal(t, expectedStatus, peerInstance.JoinBySnaphotStatus())
+
+	// write a msg to waitCh to unblock channel init func
+	waitCh <- struct{}{}
+
+	// wait until ledger creation is done
+	ledgerCreationDone := func() bool {
+		return !peerInstance.JoinBySnaphotStatus().InProgress
+	}
+	require.Eventually(t, ledgerCreationDone, time.Minute, time.Second)
+
+	// verify channel init func is called
+	require.Equal(t, testChannelID, initArg)
+
+	// verify ledger created
+	ledger := peerInstance.GetLedger(testChannelID)
+	require.NotNil(t, ledger)
+
+	bcInfo, err := ledger.GetBlockchainInfo()
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), bcInfo.GetHeight())
+
+	expectedStatus = &pb.JoinBySnapshotStatus{InProgress: false, BootstrappingSnapshotDir: ""}
+	require.Equal(t, expectedStatus, peerInstance.JoinBySnaphotStatus())
+
+	// Bad ledger
+	ledger = peerInstance.GetLedger("BogusChain")
+	require.Nil(t, ledger)
+
+	// Correct PolicyManager
+	pmgr := peerInstance.GetPolicyManager(testChannelID)
+	require.NotNil(t, pmgr)
+
+	// Bad PolicyManager
+	pmgr = peerInstance.GetPolicyManager("BogusChain")
+	require.Nil(t, pmgr)
+
+	channels := peerInstance.GetChannelsInfo()
+	require.Equal(t, 1, len(channels))
 }
 
 func TestDeliverSupportManager(t *testing.T) {

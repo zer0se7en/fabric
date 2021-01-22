@@ -65,7 +65,11 @@ func init() {
 	factory.InitFactories(nil)
 }
 
-func mockOrderer(batchTimeout time.Duration, metadata []byte) *mocks.OrdererConfig {
+func mockOrderer(metadata []byte) *mocks.OrdererConfig {
+	return mockOrdererWithBatchTimeout(time.Second, metadata)
+}
+
+func mockOrdererWithBatchTimeout(batchTimeout time.Duration, metadata []byte) *mocks.OrdererConfig {
 	mockOrderer := &mocks.OrdererConfig{}
 	mockOrderer.BatchTimeoutReturns(batchTimeout)
 	mockOrderer.ConsensusMetadataReturns(metadata)
@@ -73,7 +77,7 @@ func mockOrderer(batchTimeout time.Duration, metadata []byte) *mocks.OrdererConf
 }
 
 func mockOrdererWithTLSRootCert(batchTimeout time.Duration, metadata []byte, tlsCA tlsgen.CA) *mocks.OrdererConfig {
-	mockOrderer := mockOrderer(batchTimeout, metadata)
+	mockOrderer := mockOrdererWithBatchTimeout(batchTimeout, metadata)
 	mockOrg := &mocks.OrdererOrg{}
 	mockMSP := &mocks.MSP{}
 	mockMSP.GetTLSRootCertsReturns([][]byte{tlsCA.CertBytes()})
@@ -212,7 +216,7 @@ var _ = Describe("Chain", func() {
 
 			chain.Start()
 			cRel, status := chain.StatusReport()
-			Expect(cRel).To(Equal(orderer_types.ClusterRelationMember))
+			Expect(cRel).To(Equal(orderer_types.ConsensusRelationConsenter))
 			Expect(status).To(Equal(orderer_types.StatusActive))
 
 			// When the Raft node bootstraps, it produces a ConfChange
@@ -353,7 +357,7 @@ var _ = Describe("Chain", func() {
 				By("respecting batch timeout")
 				cutter.CutNext = false
 				timeout := time.Second
-				support.SharedConfigReturns(mockOrderer(timeout, nil))
+				support.SharedConfigReturns(mockOrdererWithBatchTimeout(timeout, nil))
 				err = chain.Order(env, 0)
 				Expect(err).NotTo(HaveOccurred())
 				Expect(fakeFields.fakeNormalProposalsReceived.AddCallCount()).To(Equal(2))
@@ -371,7 +375,7 @@ var _ = Describe("Chain", func() {
 				close(cutter.Block)
 
 				timeout := time.Second
-				support.SharedConfigReturns(mockOrderer(timeout, nil))
+				support.SharedConfigReturns(mockOrdererWithBatchTimeout(timeout, nil))
 
 				err := chain.Order(env, 0)
 				Expect(err).NotTo(HaveOccurred())
@@ -392,7 +396,7 @@ var _ = Describe("Chain", func() {
 			It("does not write a block if halted before timeout", func() {
 				close(cutter.Block)
 				timeout := time.Second
-				support.SharedConfigReturns(mockOrderer(timeout, nil))
+				support.SharedConfigReturns(mockOrdererWithBatchTimeout(timeout, nil))
 
 				err := chain.Order(env, 0)
 				Expect(err).NotTo(HaveOccurred())
@@ -409,7 +413,7 @@ var _ = Describe("Chain", func() {
 				close(cutter.Block)
 
 				timeout := time.Second
-				support.SharedConfigReturns(mockOrderer(timeout, nil))
+				support.SharedConfigReturns(mockOrdererWithBatchTimeout(timeout, nil))
 
 				err := chain.Order(env, 0)
 				Expect(err).NotTo(HaveOccurred())
@@ -447,7 +451,7 @@ var _ = Describe("Chain", func() {
 				close(cutter.Block)
 
 				timeout := time.Second
-				support.SharedConfigReturns(mockOrderer(timeout, nil))
+				support.SharedConfigReturns(mockOrdererWithBatchTimeout(timeout, nil))
 
 				err := chain.Order(env, 0)
 				Expect(err).NotTo(HaveOccurred())
@@ -465,7 +469,7 @@ var _ = Describe("Chain", func() {
 					close(cutter.Block)
 
 					timeout := time.Hour
-					support.SharedConfigReturns(mockOrderer(timeout, nil))
+					support.SharedConfigReturns(mockOrdererWithBatchTimeout(timeout, nil))
 					support.SequenceReturns(1)
 				})
 
@@ -942,6 +946,9 @@ var _ = Describe("Chain", func() {
 									return nil
 								}
 
+								// This is a false assumption - single node shouldn't be able to pull block from anywhere.
+								// However, this test is mainly to assert that chain should attempt catchup upon start,
+								// so we could live with it.
 								return ledger[i]
 							}
 
@@ -963,6 +970,27 @@ var _ = Describe("Chain", func() {
 							close(signal)                         // unblock block puller
 							Eventually(done).Should(Receive(nil)) // WaitReady should be unblocked
 							Eventually(c.support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(2))
+						})
+
+						It("commits block from snapshot if it's missing from ledger", func() {
+							// Scenario:
+							// Single node exists right after a snapshot is taken, while the block
+							// in it hasn't been successfully persisted into ledger (there can be one
+							// async block write in-flight). Then the node is restarted, and catches
+							// up using the block in snapshot.
+
+							Expect(chain.Order(env, uint64(0))).To(Succeed())
+							Eventually(support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(1))
+							Eventually(countFiles, LongEventualTimeout).Should(Equal(1))
+
+							chain.Halt()
+
+							c := newChain(10*time.Second, channelID, dataDir, 1, raftMetadata, consenters, cryptoProvider, nil, nil)
+							c.init()
+							c.Start()
+							defer c.Halt()
+
+							Eventually(c.support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(1))
 						})
 
 						It("restores snapshot w/o extra entries", func() {
@@ -1420,11 +1448,60 @@ var _ = Describe("Chain", func() {
 
 			By("Asserting the haltCallback is called when the node is removed from the replica set")
 			Eventually(fakeHaltCallbacker.HaltCallbackCallCount).Should(Equal(1))
+			By("Asserting the StatusReport responds correctly after eviction")
+			Eventually(
+				func() orderer_types.ConsensusRelation {
+					cRel, _ := c1.StatusReport()
+					return cRel
+				},
+			).Should(Equal(orderer_types.ConsensusRelationConfigTracker))
+			_, status := c1.StatusReport()
+			Expect(status).To(Equal(orderer_types.StatusInactive))
 
 			By("Asserting leader can still serve requests as single-node cluster")
 			c2.cutter.CutNext = true
 			Expect(c2.Order(env, 0)).To(Succeed())
 			Eventually(c2.support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(1))
+		})
+
+		It("remove leader by reconfiguring cluster, but Halt before eviction", func() {
+			network.elect(1)
+
+			// trigger status dissemination
+			Eventually(func() int {
+				c1.clock.Increment(interval)
+				return c2.fakeFields.fakeActiveNodes.SetCallCount()
+			}, LongEventualTimeout).Should(Equal(2))
+			Expect(c2.fakeFields.fakeActiveNodes.SetArgsForCall(1)).To(Equal(float64(2)))
+
+			By("Configuring cluster to remove node")
+			Expect(c1.Configure(configEnv, 0)).To(Succeed())
+			Eventually(c2.support.WriteConfigBlockCallCount, LongEventualTimeout).Should(Equal(1))
+			c1.clock.WaitForNWatchersAndIncrement((ELECTION_TICK-1)*interval, 2)
+			c1.Halt()
+
+			Eventually(func() <-chan raft.SoftState {
+				c2.clock.Increment(interval)
+				return c2.observe
+			}, LongEventualTimeout).Should(Receive(StateEqual(2, raft.StateLeader)))
+
+			By("Asserting leader can still serve requests as single-node cluster")
+			c2.cutter.CutNext = true
+			Expect(c2.Order(env, 0)).To(Succeed())
+			Eventually(c2.support.WriteBlockCallCount, LongEventualTimeout).Should(Equal(1))
+
+			By("Asserting the haltCallback is not called when Halt is called before eviction")
+			c1.clock.Increment(interval)
+			Eventually(fakeHaltCallbacker.HaltCallbackCallCount).Should(Equal(0))
+			By("Asserting the StatusReport responds correctly if the haltCallback is not called")
+			Eventually(
+				func() orderer_types.Status {
+					_, status := c1.StatusReport()
+					return status
+				},
+			).Should(Equal(orderer_types.StatusInactive))
+			cRel, _ := c1.StatusReport()
+			Expect(cRel).To(Equal(orderer_types.ConsensusRelationConsenter))
 		})
 
 		It("can remove leader by reconfiguring cluster even if leadership transfer fails", func() {
@@ -3320,7 +3397,7 @@ func newChain(
 	if support == nil {
 		support = &consensusmocks.FakeConsenterSupport{}
 		support.ChannelIDReturns(channel)
-		support.SharedConfigReturns(mockOrderer(timeout, nil))
+		support.SharedConfigReturns(mockOrdererWithBatchTimeout(timeout, nil))
 	}
 	cutter := mockblockcutter.NewReceiver()
 	close(cutter.Block)
@@ -3623,7 +3700,7 @@ func createNetwork(
 		m := proto.Clone(raftMetadata).(*raftprotos.BlockMetadata)
 		support := &consensusmocks.FakeConsenterSupport{}
 		support.ChannelIDReturns(channel)
-		support.SharedConfigReturns(mockOrderer(timeout, nil))
+		support.SharedConfigReturns(mockOrdererWithBatchTimeout(timeout, nil))
 		mockOrdererConfig := mockOrdererWithTLSRootCert(timeout, nil, tlsCA)
 		support.SharedConfigReturns(mockOrdererConfig)
 		n.addChain(newChain(timeout, channel, dir, nodeID, m, consenters, cryptoProvider, support, haltCallback))

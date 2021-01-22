@@ -88,7 +88,7 @@ In addition to the standard :doc:`prereqs` for Fabric, this tutorial leverages t
 
   .. code:: bash
 
-    sudo apt install build-essentials
+    sudo apt install build-essential
 
 Set up the blockchain network
 -----------------------------
@@ -138,7 +138,7 @@ Next, let's deploy the chaincode by calling the ``./network.sh`` script with the
 
 .. code:: bash
 
-  ./network.sh deployCC -ccn basic -ccl javascript
+  ./network.sh deployCC -ccn basic -ccp ../asset-transfer-basic/chaincode-javascript/ -ccl javascript
 
 .. note:: Behind the scenes, this script uses the chaincode lifecycle to package, install,
           query installed chaincode, approve chaincode for both Org1 and Org2, and finally commit the chaincode.
@@ -158,7 +158,13 @@ Sample application
 ^^^^^^^^^^^^^^^^^^
 Next, let's prepare the sample Asset Transfer Javascript application that will be used to interact with the deployed chaincode.
 
-- `JavaScript application <https://github.com/hyperledger/fabric-samples/blob/{BRANCH}/asset-transfer-basic/application-javascript>`__
+- `JavaScript application <https://github.com/hyperledger/fabric-samples/blob/master/asset-transfer-basic/application-javascript>`__
+
+Note that the sample application is also available in Go and Java at the links below:
+
+- `Go application <https://github.com/hyperledger/fabric-samples/blob/master/asset-transfer-basic/application-go>`__
+- `Java application <https://github.com/hyperledger/fabric-samples/blob/master/asset-transfer-basic/application-java>`__
+
 
 Open a new terminal, and navigate to the ``application-javascript`` folder.
 
@@ -340,8 +346,15 @@ to the Contract using the contract name and channel name via Gateway:
     // Build a network instance based on the channel where the smart contract is deployed
     const network = await gateway.getNetwork(channelName);
 
+
     // Get the contract from the network.
     const contract = network.getContract(chaincodeName);
+
+When a chaincode package includes multiple smart contracts, on the `getContract() API <https://hyperledger.github.io/fabric-sdk-node/release-2.2/module-fabric-network.Network.html#getContract>`__ you can specify both the name of the chaincode package and a specific smart contract to target. For example:
+
+.. code:: bash
+
+  const contract = await network.getContract('chaincodeName', 'smartContractName');
 
 Fourth, the application initializes the ledger with some sample data
 --------------------------------------------------------------------
@@ -727,7 +740,7 @@ Terminal Output:
   }
 
 In this part of the sequence, the sample application attempts to submit
-an ``'UdpateAsset'`` transaction for an asset that we know does not exist (``asset70``).
+an ``'UpdateAsset'`` transaction for an asset that we know does not exist (``asset70``).
 We expect that we will get an error because you cannot update an asset that does not exist,
 which is why it is a good idea to check if an asset exists prior to attempting an
 asset update or deletion.
@@ -958,10 +971,10 @@ The asset-transfer ('basic') smart contract
 -------------------------------------------
 The smart contract sample is available in the following languages:
 
-- `Golang <https://github.com/hyperledger/fabric-samples/blob/{BRANCH}/asset-transfer-basic/chaincode-go>`__
-- `Java <https://github.com/hyperledger/fabric-samples/blob/{BRANCH}/asset-transfer-basic/chaincode-java>`__
-- `JavaScript <https://github.com/hyperledger/fabric-samples/blob/{BRANCH}/asset-transfer-basic/chaincode-javascript>`__
-- `Typescript <https://github.com/hyperledger/fabric-samples/blob/{BRANCH}/asset-transfer-basic/chaincode-typescript>`__
+- `Golang <https://github.com/hyperledger/fabric-samples/blob/master/asset-transfer-basic/chaincode-go>`__
+- `Java <https://github.com/hyperledger/fabric-samples/blob/master/asset-transfer-basic/chaincode-java>`__
+- `JavaScript <https://github.com/hyperledger/fabric-samples/blob/master/asset-transfer-basic/chaincode-javascript>`__
+- `Typescript <https://github.com/hyperledger/fabric-samples/blob/master/asset-transfer-basic/chaincode-typescript>`__
 
 Clean up
 --------
