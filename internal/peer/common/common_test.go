@@ -81,7 +81,7 @@ func TestInitCryptoMissingDir(t *testing.T) {
 
 func TestInitCryptoFileNotDir(t *testing.T) {
 	file := path.Join(os.TempDir(), util.GenerateUUID())
-	err := ioutil.WriteFile(file, []byte{}, 0644)
+	err := ioutil.WriteFile(file, []byte{}, 0o644)
 	require.Nil(t, err, "Failed to create test file")
 	defer os.Remove(file)
 	err = common.InitCrypto(file, "SampleOrg", msp.ProviderTypeToString(msp.FABRIC))
@@ -111,6 +111,7 @@ func TestSetBCCSPKeystorePath(t *testing.T) {
 	os.Setenv("FABRIC_CFG_PATH", cfgPath)
 	viper.Reset()
 	err = common.InitConfig("notset")
+	require.NoError(t, err)
 	common.SetBCCSPKeystorePath()
 	t.Log(viper.GetString(cfgKey))
 	require.Equal(t, "", viper.GetString(cfgKey))

@@ -8,7 +8,6 @@ package cluster
 
 import (
 	"bytes"
-	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
@@ -146,26 +145,11 @@ func (dialer *PredicateDialer) UpdateRootCAs(serverRootCAs [][]byte) {
 // certificate chain satisfy verifyFunc
 func (dialer *PredicateDialer) Dial(address string, verifyFunc RemoteVerifier) (*grpc.ClientConn, error) {
 	dialer.lock.RLock()
-	cfg := dialer.Config.Clone()
+	clientConfigCopy := dialer.Config
 	dialer.lock.RUnlock()
 
-	cfg.SecOpts.VerifyCertificate = verifyFunc
-	client, err := comm.NewGRPCClient(cfg)
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	return client.NewConnection(address, func(tlsConfig *tls.Config) {
-		// We need to dynamically overwrite the TLS root CAs,
-		// as they may be updated.
-		dialer.lock.RLock()
-		serverRootCAs := dialer.Config.Clone().SecOpts.ServerRootCAs
-		dialer.lock.RUnlock()
-
-		tlsConfig.RootCAs = x509.NewCertPool()
-		for _, pem := range serverRootCAs {
-			tlsConfig.RootCAs.AppendCertsFromPEM(pem)
-		}
-	})
+	clientConfigCopy.SecOpts.VerifyCertificate = verifyFunc
+	return clientConfigCopy.Dial(address)
 }
 
 // DERtoPEM returns a PEM representation of the DER
@@ -185,15 +169,10 @@ type StandardDialer struct {
 
 // Dial dials an address according to the given EndpointCriteria
 func (dialer *StandardDialer) Dial(endpointCriteria EndpointCriteria) (*grpc.ClientConn, error) {
-	cfg := dialer.Config.Clone()
-	cfg.SecOpts.ServerRootCAs = endpointCriteria.TLSRootCAs
+	clientConfigCopy := dialer.Config
+	clientConfigCopy.SecOpts.ServerRootCAs = endpointCriteria.TLSRootCAs
 
-	client, err := comm.NewGRPCClient(cfg)
-	if err != nil {
-		return nil, errors.Wrap(err, "failed creating gRPC client")
-	}
-
-	return client.NewConnection(endpointCriteria.Endpoint)
+	return clientConfigCopy.Dial(endpointCriteria.Endpoint)
 }
 
 //go:generate mockery -dir . -name BlockVerifier -case underscore -output ./mocks/

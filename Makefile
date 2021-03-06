@@ -45,8 +45,8 @@
 #   - unit-test - runs the go-test based unit tests
 #   - verify - runs unit tests for only the changed package tree
 
-ALPINE_VER ?= 3.12
-BASE_VERSION = 2.3.0
+ALPINE_VER ?= 3.13
+BASE_VERSION = 2.4.0
 
 # 3rd party image version
 # These versions are also set in the runners in ./integration/runners/
@@ -77,7 +77,7 @@ METADATA_VAR += CommitSHA=$(EXTRA_VERSION)
 METADATA_VAR += BaseDockerLabel=$(BASE_DOCKER_LABEL)
 METADATA_VAR += DockerNamespace=$(DOCKER_NS)
 
-GO_VER = 1.14.12
+GO_VER = 1.15.7
 GO_TAGS ?=
 
 RELEASE_EXES = orderer $(TOOLS_EXES)
@@ -106,14 +106,18 @@ all: check-go-version native docker checks
 checks: basic-checks unit-test integration-test
 
 .PHONY: basic-checks
-basic-checks: check-go-version license spelling references trailing-spaces linter check-metrics-doc filename-spaces check-swagger
+basic-checks: check-go-version license spelling references trailing-spaces linter check-help-docs check-metrics-doc filename-spaces check-swagger
 
 .PHONY: desk-checks
 desk-check: checks verify
 
 .PHONY: help-docs
 help-docs: native
-	@scripts/generateHelpDocs.sh
+	@scripts/help_docs.sh
+
+.PHONY: check-help-docs
+check-help-docs: native
+	@scripts/help_docs.sh check
 
 .PHONY: spelling
 spelling: gotool.misspell
@@ -174,7 +178,7 @@ profile: export JOB_TYPE=PROFILE
 profile: unit-test
 
 .PHONY: linter
-linter: check-deps gotool.goimports
+linter: check-deps gotool.goimports gotool.gofumpt gotool.staticcheck
 	@echo "LINT: Running code checks.."
 	./scripts/golinter.sh
 
@@ -211,6 +215,9 @@ protos: gotool.protoc-gen-go
 .PHONY: native
 native: $(RELEASE_EXES)
 
+.PHONY: tools
+tools: $(TOOLS_EXES)
+
 .PHONY: $(RELEASE_EXES)
 $(RELEASE_EXES): %: $(BUILD_DIR)/bin/%
 
@@ -227,11 +234,11 @@ docker: $(RELEASE_IMAGES:%=%-docker)
 .PHONY: $(RELEASE_IMAGES:%=%-docker)
 $(RELEASE_IMAGES:%=%-docker): %-docker: $(BUILD_DIR)/images/%/$(DUMMY)
 
-$(BUILD_DIR)/images/ccenv/$(DUMMY):   BUILD_CONTEXT=images/ccenv
 $(BUILD_DIR)/images/baseos/$(DUMMY):  BUILD_CONTEXT=images/baseos
+$(BUILD_DIR)/images/ccenv/$(DUMMY):   BUILD_CONTEXT=images/ccenv
 $(BUILD_DIR)/images/peer/$(DUMMY):    BUILD_ARGS=--build-arg GO_TAGS=${GO_TAGS}
 $(BUILD_DIR)/images/orderer/$(DUMMY): BUILD_ARGS=--build-arg GO_TAGS=${GO_TAGS}
-$(BUILD_DIR)/images/tools/$(DUMMY): BUILD_ARGS=--build-arg GO_TAGS=${GO_TAGS}
+$(BUILD_DIR)/images/tools/$(DUMMY):   BUILD_ARGS=--build-arg GO_TAGS=${GO_TAGS}
 
 $(BUILD_DIR)/images/%/$(DUMMY):
 	@echo "Building Docker image $(DOCKER_NS)/fabric-$*"

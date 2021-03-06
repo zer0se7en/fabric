@@ -365,7 +365,7 @@ func BlockPullerFromConfigBlock(conf PullerConfig, block *common.Block, verifier
 	}
 
 	clientConf := comm.ClientConfig{
-		Timeout: conf.Timeout,
+		DialTimeout: conf.Timeout,
 		SecOpts: comm.SecureOptions{
 			Certificate:       conf.TLSCert,
 			Key:               conf.TLSKey,
@@ -375,7 +375,7 @@ func BlockPullerFromConfigBlock(conf PullerConfig, block *common.Block, verifier
 	}
 
 	dialer := &StandardDialer{
-		Config: clientConf.Clone(),
+		Config: clientConf,
 	}
 
 	tlsCertAsDER, _ := pem.Decode(conf.TLSCert)
@@ -549,7 +549,7 @@ func (ci *ChainInspector) Channels() []ChannelGenesisBlock {
 		}
 		ci.validateHashPointer(block, prevHash)
 		// Set the previous hash for the next iteration
-		prevHash = protoutil.BlockHeaderHash(block.Header)
+		prevHash = protoutil.BlockHeaderHash(block.Header) //lint:ignore SA5011 logs and panics above
 
 		channel, gb, err := ExtractGenesisBlock(ci.Logger, block)
 		if err != nil {

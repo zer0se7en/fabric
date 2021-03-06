@@ -14,7 +14,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric-protos-go/ledger/queryresult"
+	"github.com/hyperledger/fabric-protos-go/ledger/rwset"
+	"github.com/hyperledger/fabric-protos-go/ledger/rwset/kvrwset"
 	"github.com/hyperledger/fabric/common/ledger/testutil"
 	"github.com/hyperledger/fabric/core/ledger"
 	"github.com/hyperledger/fabric/core/ledger/internal/version"
@@ -250,7 +253,7 @@ func testTxValidation(t *testing.T, env testEnv) {
 	txRWSet2, _ := s2.GetTxSimulationResults()
 	txMgrHelper.validateAndCommitRWSet(txRWSet2.PubSimulationResults)
 
-	//RWSet for tx3 and tx4 and tx5 should be invalid now due to read conflicts
+	// RWSet for tx3 and tx4 and tx5 should be invalid now due to read conflicts
 	txRWSet3, _ := s3.GetTxSimulationResults()
 	txMgrHelper.checkRWsetInvalid(txRWSet3.PubSimulationResults)
 
@@ -393,7 +396,7 @@ func testIterator(t *testing.T, env testEnv, numKeys int, startKeyNum int, endKe
 		begin = startKeyNum
 		startKey = createTestKey(startKeyNum)
 	} else {
-		begin = 1 //first key in the db
+		begin = 1 // first key in the db
 		startKey = ""
 	}
 
@@ -402,7 +405,7 @@ func testIterator(t *testing.T, env testEnv, numKeys int, startKeyNum int, endKe
 		end = endKeyNum
 	} else {
 		endKey = ""
-		end = numKeys + 1 //last key in the db
+		end = numKeys + 1 // last key in the db
 	}
 
 	expectedCount := end - begin
@@ -595,14 +598,13 @@ func testTxValidationWithItr(t *testing.T, env testEnv) {
 	txRWSet4, _ := s4.GetTxSimulationResults()
 	txMgrHelper.validateAndCommitRWSet(txRWSet4.PubSimulationResults)
 
-	//RWSet tx3 should be invalid now
+	// RWSet tx3 should be invalid now
 	txRWSet3, _ := s3.GetTxSimulationResults()
 	txMgrHelper.checkRWsetInvalid(txRWSet3.PubSimulationResults)
 
 	// tx2 should still be valid
 	txRWSet2, _ := s2.GetTxSimulationResults()
 	txMgrHelper.validateAndCommitRWSet(txRWSet2.PubSimulationResults)
-
 }
 
 func TestGetSetMultipeKeys(t *testing.T) {
@@ -664,7 +666,7 @@ func createTestValue(i int) []byte {
 	return []byte(fmt.Sprintf("value_%03d", i))
 }
 
-//TestExecuteQuery is only tested on the CouchDB testEnv
+// TestExecuteQuery is only tested on the CouchDB testEnv
 func TestExecuteQuery(t *testing.T) {
 	for _, testEnv := range testEnvs {
 		// Query is only supported and tested on the CouchDB testEnv
@@ -679,7 +681,6 @@ func TestExecuteQuery(t *testing.T) {
 }
 
 func testExecuteQuery(t *testing.T, env testEnv) {
-
 	type Asset struct {
 		ID        string `json:"_id"`
 		Rev       string `json:"_rev"`
@@ -727,14 +728,14 @@ func testExecuteQuery(t *testing.T, env testEnv) {
 		if queryRecord == nil {
 			break
 		}
-		//Unmarshal the document to Asset structure
+		// Unmarshal the document to Asset structure
 		assetResp := &Asset{}
 		require.NoError(t, json.Unmarshal(queryRecord.(*queryresult.KV).Value, &assetResp))
-		//Verify the owner retrieved matches
+		// Verify the owner retrieved matches
 		require.Equal(t, "bob", assetResp.Owner)
 		counter++
 	}
-	//Ensure the query returns 3 documents
+	// Ensure the query returns 3 documents
 	require.Equal(t, 3, counter)
 }
 
@@ -753,7 +754,6 @@ func TestExecutePaginatedQuery(t *testing.T) {
 }
 
 func testExecutePaginatedQuery(t *testing.T, env testEnv) {
-
 	type Asset struct {
 		ID        string `json:"_id"`
 		Rev       string `json:"_rev"`
@@ -792,14 +792,14 @@ func testExecutePaginatedQuery(t *testing.T, env testEnv) {
 		if queryRecord == nil {
 			break
 		}
-		//Unmarshal the document to Asset structure
+		// Unmarshal the document to Asset structure
 		assetResp := &Asset{}
 		require.NoError(t, json.Unmarshal(queryRecord.(*queryresult.KV).Value, &assetResp))
-		//Verify the owner retrieved matches
+		// Verify the owner retrieved matches
 		require.Equal(t, "bob", assetResp.Owner)
 		counter++
 	}
-	//Ensure the query returns 2 documents
+	// Ensure the query returns 2 documents
 	require.Equal(t, 2, counter)
 
 	bookmark := itr.GetBookmarkAndClose()
@@ -812,14 +812,14 @@ func testExecutePaginatedQuery(t *testing.T, env testEnv) {
 		if queryRecord == nil {
 			break
 		}
-		//Unmarshal the document to Asset structure
+		// Unmarshal the document to Asset structure
 		assetResp := &Asset{}
 		require.NoError(t, json.Unmarshal(queryRecord.(*queryresult.KV).Value, &assetResp))
-		//Verify the owner retrieved matches
+		// Verify the owner retrieved matches
 		require.Equal(t, "bob", assetResp.Owner)
 		counter++
 	}
-	//Ensure the query returns 1 documents
+	// Ensure the query returns 1 documents
 	require.Equal(t, 1, counter)
 }
 
@@ -880,7 +880,6 @@ func TestTxSimulatorUnsupportedTx(t *testing.T) {
 	require.NoError(t, err)
 	err = simulator.SetState("ns", "key", []byte("value"))
 	require.EqualError(t, err, "txid [txid4]: unsuppored transaction. Transaction has already performed a paginated query. Writes are not allowed")
-
 }
 
 func TestTxSimulatorUnsupportedTxCouchDBQuery(t *testing.T) {
@@ -922,6 +921,31 @@ func TestConstructUniquePvtData(t *testing.T) {
 	// ns1-coll1-key1 should be accepted
 	pvtDataBlk3Tx1 := producePvtdata(t, 1, []string{"ns1:coll1"}, []string{"key1"}, [][]byte{v3})
 
+	pvtDataBlk3Tx2WriteSetBytes, err := proto.Marshal(
+		&kvrwset.KVRWSet{
+			Writes: []*kvrwset.KVWrite{
+				{Key: "key5", IsDelete: false, Value: nil},
+			},
+		},
+	)
+	require.NoError(t, err)
+	pvtDataBlk3Tx2 := &ledger.TxPvtData{
+		SeqInBlock: 2,
+		WriteSet: &rwset.TxPvtReadWriteSet{
+			NsPvtRwset: []*rwset.NsPvtReadWriteSet{
+				{
+					Namespace: "ns1",
+					CollectionPvtRwset: []*rwset.CollectionPvtReadWriteSet{
+						{
+							CollectionName: "coll1",
+							Rwset:          pvtDataBlk3Tx2WriteSetBytes,
+						},
+					},
+				},
+			},
+		},
+	}
+
 	blocksPvtData := map[uint64][]*ledger.TxPvtData{
 		1: {
 			pvtDataBlk1Tx1,
@@ -934,6 +958,7 @@ func TestConstructUniquePvtData(t *testing.T) {
 		},
 		3: {
 			pvtDataBlk3Tx1,
+			pvtDataBlk3Tx2,
 		},
 	}
 
@@ -949,11 +974,15 @@ func TestConstructUniquePvtData(t *testing.T) {
 	hashedCompositeKeyNs1Coll1Key1 := privacyenabledstate.HashedCompositeKey{Namespace: "ns1", CollectionName: "coll1", KeyHash: string(util.ComputeStringHash("key1"))}
 	pvtKVWriteNs1Coll1Key1 := &privacyenabledstate.PvtKVWrite{Key: "key1", IsDelete: false, Value: v3, Version: version.NewHeight(3, 1)}
 
+	hashedCompositeKeyNs1Coll1Key5 := privacyenabledstate.HashedCompositeKey{Namespace: "ns1", CollectionName: "coll1", KeyHash: string(util.ComputeStringHash("key5"))}
+	pvtKVWriteNs1Coll1Key5 := &privacyenabledstate.PvtKVWrite{Key: "key5", IsDelete: true, Value: nil, Version: version.NewHeight(3, 2)}
+
 	expectedUniquePvtData := uniquePvtDataMap{
 		hashedCompositeKeyNs1Coll2Key3: pvtKVWriteNs1Coll2Key3,
 		hashedCompositeKeyNs1Coll2Key4: pvtKVWriteNs1Coll2Key4,
 		hashedCompositeKeyNs1Coll1Key2: pvtKVWriteNs1Coll1Key2,
 		hashedCompositeKeyNs1Coll1Key1: pvtKVWriteNs1Coll1Key1,
+		hashedCompositeKeyNs1Coll1Key5: pvtKVWriteNs1Coll1Key5,
 	}
 
 	uniquePvtData, err := constructUniquePvtData(blocksPvtData)
@@ -1498,7 +1527,7 @@ func testTxWithPvtdataMetadata(t *testing.T, env testEnv, ns, coll string) {
 func prepareNextBlockForTest(t *testing.T, txMgr *LockBasedTxMgr, bg *testutil.BlockGenerator,
 	txid string, pubKVs map[string]string, pvtKVs map[string]string, isMissing bool) *ledger.BlockAndPvtData {
 	simulator, _ := txMgr.NewTxSimulator(txid)
-	//simulating transaction
+	// simulating transaction
 	for k, v := range pubKVs {
 		require.NoError(t, simulator.SetState("ns", k, []byte(v)))
 	}
@@ -1516,7 +1545,8 @@ func prepareNextBlockForTestFromSimulator(t *testing.T, bg *testutil.BlockGenera
 	simRes, _ := simulator.GetTxSimulationResults()
 	pubSimBytes, _ := simRes.GetPubSimulationBytes()
 	block := bg.NextBlock([][]byte{pubSimBytes})
-	return &ledger.BlockAndPvtData{Block: block,
+	return &ledger.BlockAndPvtData{
+		Block:   block,
 		PvtData: ledger.TxPvtDataMap{0: {SeqInBlock: 0, WriteSet: simRes.PvtSimulationResults}},
 	}
 }

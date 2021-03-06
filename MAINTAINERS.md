@@ -1,6 +1,8 @@
 Maintainers
 ===========
 
+See [the documentation on Maintainers](https://hyperledger-fabric.readthedocs.io/en/latest/CONTRIBUTING.html#maintainers) to learn about the role of the maintainers and the process to become one.
+
 **Active Maintainers**
 
 | Name | GitHub | Chat | email
@@ -8,7 +10,6 @@ Maintainers
 | Alessandro Sorniotti | [ale-linux][ale-linux] | aso | <ale.linux@sopit.net>
 | Brett Logan | [lindluni][lindluni] | BrettLogan | <development.brett@gmail.com>
 | Artem Barger | [c0rwin][c0rwin] | c0rwin | <bartem@il.ibm.com>
-| Danny Cao | [caod123][caod123] | caod | <dcao@us.ibm.com>
 | Senthilnathan Natarajan | [cendhu][cendhu] | Senthil1 | <cendhu@gmail.com>
 | Dave Enyeart | [denyeart][denyeart] | dave.enyeart | <enyeart@us.ibm.com>
 | Jay Guo | [guoger][guoger] | guoger | <guojiannan1101@gmail.com>
@@ -44,6 +45,7 @@ Maintainers
 |------|--------|------|----------------------
 | Binh Nguyen | [binhn][binhn] | binhn | <binh1010010110@gmail.com>
 | Chris Ferris | [christo4ferris][christo4ferris] | cbf | <chris.ferris@gmail.com>
+| Danny Cao | [caod123][caod123] | caod | <caoxiaohua@gmail.com>
 | Gabor Hosszu | [gabre][gabre] | hgabor | <gabor@digitalasset.com>
 | Greg Haskins | [ghaskins][ghaskins] | ghaskins | <gregory.haskins@gmail.com>
 | Jonathan Levi | [hacera][hacera] |JonathanLevi | <jonathan@hacera.com>

@@ -490,18 +490,16 @@ func createClientAndService(t *testing.T, testdir string) (*client, *client, *se
 	clientKeyPair, err := ca.NewClientCertKeyPair()
 	require.NoError(t, err)
 
-	dialer, err := comm.NewGRPCClient(comm.ClientConfig{
-		Timeout: time.Second * 3,
+	cc := comm.ClientConfig{
+		DialTimeout: time.Second * 3,
 		SecOpts: comm.SecureOptions{
 			UseTLS:        true,
 			Certificate:   clientKeyPair.Cert,
 			Key:           clientKeyPair.Key,
 			ServerRootCAs: [][]byte{ca.CertBytes()},
 		},
-	})
-	require.NoError(t, err)
-
-	conn, err := dialer.NewConnection(gRPCServer.Address())
+	}
+	conn, err := cc.Dial(gRPCServer.Address())
 	require.NoError(t, err)
 
 	userSigner := createUserSigner(t)

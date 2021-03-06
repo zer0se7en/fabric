@@ -93,7 +93,7 @@ func TestDialerCustomKeepAliveOptions(t *testing.T) {
 		KaOpts: comm.KeepaliveOptions{
 			ClientTimeout: time.Second * 12345,
 		},
-		Timeout: time.Millisecond * 100,
+		DialTimeout: time.Millisecond * 100,
 		SecOpts: comm.SecureOptions{
 			RequireClientCert: true,
 			Key:               clientKeyPair.Key,
@@ -117,10 +117,10 @@ func TestPredicateDialerUpdateRootCAs(t *testing.T) {
 	require.NoError(t, err)
 
 	dialer := &cluster.PredicateDialer{
-		Config: node1.clientConfig.Clone(),
+		Config: node1.clientConfig,
 	}
 	dialer.Config.SecOpts.ServerRootCAs = [][]byte{anotherTLSCA.CertBytes()}
-	dialer.Config.Timeout = time.Second
+	dialer.Config.DialTimeout = time.Second
 	dialer.Config.AsyncConnect = false
 
 	_, err = dialer.Dial(node1.srv.Address(), nil)
@@ -156,7 +156,7 @@ func TestDialerBadConfig(t *testing.T) {
 	_, err := dialer.Dial("127.0.0.1:8080", func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
 		return nil
 	})
-	require.EqualError(t, err, "error adding root certificate: asn1: syntax error: sequence truncated")
+	require.ErrorContains(t, err, "error adding root certificate")
 }
 
 func TestDERtoPEM(t *testing.T) {
@@ -175,10 +175,7 @@ func TestStandardDialer(t *testing.T) {
 		Config: config,
 	}
 	_, err := standardDialer.Dial(cluster.EndpointCriteria{Endpoint: "127.0.0.1:8080", TLSRootCAs: certPool})
-	require.EqualError(t,
-		err,
-		"failed creating gRPC client: error adding root certificate: asn1: syntax error: sequence truncated",
-	)
+	require.ErrorContains(t, err, "error adding root certificate")
 }
 
 func TestVerifyBlockSignature(t *testing.T) {
@@ -705,7 +702,8 @@ func TestConfigFromBlockBadInput(t *testing.T) {
 					Payload: protoutil.MarshalOrPanic(&common.Payload{
 						Data: []byte{1, 2, 3},
 					}),
-				})}}},
+				})}},
+			},
 		},
 		{
 			name:          "invalid envelope in block",
@@ -730,7 +728,8 @@ func TestConfigFromBlockBadInput(t *testing.T) {
 							ChannelHeader: []byte{1, 2, 3},
 						},
 					}),
-				})}}},
+				})}},
+			},
 		},
 		{
 			name:          "invalid config block",
@@ -746,7 +745,8 @@ func TestConfigFromBlockBadInput(t *testing.T) {
 							}),
 						},
 					}),
-				})}}},
+				})}},
+			},
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {

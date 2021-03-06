@@ -79,17 +79,9 @@ var (
 		Channel: "foo",
 	})
 
-	fooRes = &orderer.SubmitResponse{
-		Info: "foo",
-	}
-
 	barReq = wrapSubmitReq(&orderer.SubmitRequest{
 		Channel: "bar",
 	})
-
-	barRes = &orderer.SubmitResponse{
-		Info: "bar",
-	}
 
 	testConsensusReq = &orderer.StepRequest{
 		Payload: &orderer.StepRequest_ConsensusRequest{
@@ -225,7 +217,7 @@ func newTestNodeWithMetrics(t *testing.T, metrics cluster.MetricsProvider, tlsCo
 	handler := &mocks.Handler{}
 	clientConfig := comm_utils.ClientConfig{
 		AsyncConnect: true,
-		Timeout:      time.Hour,
+		DialTimeout:  time.Hour,
 		SecOpts: comm_utils.SecureOptions{
 			RequireClientCert: true,
 			Key:               clientKeyPair.Key,
@@ -515,7 +507,7 @@ func TestUnavailableHosts(t *testing.T) {
 	// The below timeout makes sure that connection establishment is done
 	// asynchronously. Had it been synchronous, the Remote() call would be
 	// blocked for an hour.
-	clientConfig.Timeout = time.Hour
+	clientConfig.DialTimeout = time.Hour
 	defer node1.stop()
 
 	node2 := newTestNode(t)
@@ -528,6 +520,55 @@ func TestUnavailableHosts(t *testing.T) {
 
 	_, err = remote.NewStream(time.Millisecond * 100)
 	require.Contains(t, err.Error(), "connection")
+}
+
+func TestStreamAbortReportCorrectError(t *testing.T) {
+	// Scenario: node 1 acquires a stream to node 2 and then the stream
+	// encounters an error and as a result, the stream is aborted.
+	// We ensure the error reported is the first error, even after
+	// multiple attempts of using it.
+
+	node1 := newTestNode(t)
+	defer node1.stop()
+
+	node2 := newTestNode(t)
+	defer node2.stop()
+
+	node1.c.Configure(testChannel, []cluster.RemoteNode{node2.nodeInfo})
+	node2.c.Configure(testChannel, []cluster.RemoteNode{node1.nodeInfo})
+
+	node2.handler.On("OnSubmit", testChannel, node1.nodeInfo.ID, mock.Anything).Return(errors.Errorf("whoops")).Once()
+
+	rm1, err := node1.c.Remote(testChannel, node2.nodeInfo.ID)
+	require.NoError(t, err)
+	var streamTerminated sync.WaitGroup
+	streamTerminated.Add(1)
+
+	stream := assertEventualEstablishStream(t, rm1)
+
+	l, err := zap.NewDevelopment()
+	require.NoError(t, err)
+	stream.Logger = flogging.NewFabricLogger(l, zap.Hooks(func(entry zapcore.Entry) error {
+		if strings.Contains(entry.Message, "Stream 1 to") && strings.Contains(entry.Message, "terminated") {
+			streamTerminated.Done()
+		}
+		return nil
+	}))
+
+	// Probe the stream for the first time
+	err = stream.Send(wrapSubmitReq(testReq))
+	require.NoError(t, err)
+
+	// We should receive back the crafted error
+	_, err = stream.Recv()
+	require.Contains(t, err.Error(), "whoops")
+
+	// Wait for the stream to be terminated from within the communication infrastructure
+	streamTerminated.Wait()
+
+	// We should still receive the original crafted error despite the stream being terminated
+	err = stream.Send(wrapSubmitReq(testReq))
+	require.Contains(t, err.Error(), "whoops")
 }
 
 func TestStreamAbort(t *testing.T) {
@@ -773,19 +814,18 @@ func TestNoTLSCertificate(t *testing.T) {
 
 	clientConfig := comm_utils.ClientConfig{
 		AsyncConnect: true,
-		Timeout:      time.Millisecond * 100,
+		DialTimeout:  time.Millisecond * 100,
 		SecOpts: comm_utils.SecureOptions{
 			ServerRootCAs: [][]byte{ca.CertBytes()},
 			UseTLS:        true,
 		},
 	}
-	cl, err := comm_utils.NewGRPCClient(clientConfig)
-	require.NoError(t, err)
 
 	var conn *grpc.ClientConn
 	gt := gomega.NewGomegaWithT(t)
 	gt.Eventually(func() (bool, error) {
-		conn, err = cl.NewConnection(node1.srv.Address())
+		var err error
+		conn, err = clientConfig.Dial(node1.srv.Address())
 		return true, err
 	}, time.Minute).Should(gomega.BeTrue())
 
@@ -810,7 +850,7 @@ func TestReconnect(t *testing.T) {
 	node1 := newTestNode(t)
 	defer node1.stop()
 	conf := node1.dialer.Config
-	conf.Timeout = time.Hour
+	conf.DialTimeout = time.Hour
 
 	node2 := newTestNode(t)
 	node2.handler.On("OnSubmit", testChannel, node1.nodeInfo.ID, mock.Anything).Return(nil)

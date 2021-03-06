@@ -59,7 +59,7 @@ import (
 
 var logger = flogging.MustGetLogger("orderer.common.server")
 
-//command line flags
+// command line flags
 var (
 	app = kingpin.New("orderer", "Hyperledger Fabric orderer node")
 
@@ -177,12 +177,12 @@ func Main() {
 
 	if isClusterType {
 		logger.Infof("Setting up cluster")
-		clusterClientConfig = initializeClusterClientConfig(conf)
+		clusterClientConfig, reuseGrpcListener = initializeClusterClientConfig(conf)
 		clusterDialer = &cluster.PredicateDialer{
 			Config: clusterClientConfig,
 		}
 
-		if reuseGrpcListener = reuseListener(conf); !reuseGrpcListener {
+		if !reuseGrpcListener {
 			clusterServerConfig, clusterGRPCServer = configureClusterListener(conf, serverConfig, ioutil.ReadFile)
 		}
 
@@ -531,11 +531,11 @@ func configureClusterListener(conf *localconfig.TopLevel, generalConf comm.Serve
 	return serverConf, srv
 }
 
-func initializeClusterClientConfig(conf *localconfig.TopLevel) comm.ClientConfig {
+func initializeClusterClientConfig(conf *localconfig.TopLevel) (comm.ClientConfig, bool) {
 	cc := comm.ClientConfig{
 		AsyncConnect: true,
 		KaOpts:       comm.DefaultKeepaliveOptions,
-		Timeout:      conf.General.Cluster.DialTimeout,
+		DialTimeout:  conf.General.Cluster.DialTimeout,
 		SecOpts:      comm.SecureOptions{},
 	}
 
@@ -545,7 +545,7 @@ func initializeClusterClientConfig(conf *localconfig.TopLevel) comm.ClientConfig
 	keyFile := conf.General.Cluster.ClientPrivateKey
 	if certFile == "" && keyFile == "" {
 		if !reuseGrpcListener {
-			return cc
+			return cc, reuseGrpcListener
 		}
 		certFile = conf.General.TLS.Certificate
 		keyFile = conf.General.TLS.PrivateKey
@@ -585,7 +585,7 @@ func initializeClusterClientConfig(conf *localconfig.TopLevel) comm.ClientConfig
 		UseTLS:            true,
 	}
 
-	return cc
+	return cc, reuseGrpcListener
 }
 
 func initializeServerConfig(conf *localconfig.TopLevel, metricsProvider metrics.Provider) comm.ServerConfig {
@@ -925,14 +925,14 @@ func (mgr *caManager) updateTrustedRoots(
 	ordOrgMSPs := make(map[string]struct{})
 
 	if ac, ok := cm.ApplicationConfig(); ok {
-		//loop through app orgs and build map of MSPIDs
+		// loop through app orgs and build map of MSPIDs
 		for _, appOrg := range ac.Organizations() {
 			appOrgMSPs[appOrg.MSPID()] = struct{}{}
 		}
 	}
 
 	if ac, ok := cm.OrdererConfig(); ok {
-		//loop through orderer orgs and build map of MSPIDs
+		// loop through orderer orgs and build map of MSPIDs
 		for _, ordOrg := range ac.Organizations() {
 			ordOrgMSPs[ordOrg.MSPID()] = struct{}{}
 		}
@@ -940,7 +940,7 @@ func (mgr *caManager) updateTrustedRoots(
 
 	if cc, ok := cm.ConsortiumsConfig(); ok {
 		for _, consortium := range cc.Consortiums() {
-			//loop through consortium orgs and build map of MSPIDs
+			// loop through consortium orgs and build map of MSPIDs
 			for _, consortiumOrg := range consortium.Organizations() {
 				appOrgMSPs[consortiumOrg.MSPID()] = struct{}{}
 			}

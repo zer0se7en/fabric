@@ -16,15 +16,17 @@ nodes are isolated within a Docker Compose network, the test network is not conf
 To learn how to use Fabric in production, see [Deploying a production network](deployment_guide_overview.html).
 
 **Note:** These instructions have been verified to work against the
-latest stable Docker images and the pre-compiled setup utilities within the
+latest stable Fabric Docker images and the pre-compiled setup utilities within the
 supplied tar file. If you run these commands with images or tools from the
 current master branch, it is possible that you will encounter errors.
 
 ## Before you begin
 
-Before you can run the test network, you need to clone the `fabric-samples`
-repository and download the Fabric images. Make sure that you have installed
-the [Prerequisites](prereqs.html) and [Installed the Samples, Binaries and Docker Images](install.html).
+Before you can run the test network, you need to install Fabric Samples in your
+environment. Follow the instructions on [getting_started](getting_started.html)
+to install the required software.
+
+**Note:** The test network has been successfully verified with Docker Desktop version 2.5.0.1 and is the recommended version at this time. Higher versions may not work.
 
 ## Bring up the test network
 
@@ -103,17 +105,19 @@ ordering node. No channel is created when you run `./network.sh up`, though we
 will get there in a [future step](#creating-a-channel). If the command completes
 successfully, you will see the logs of the nodes being created:
 ```
-Creating network "net_test" with the default driver
+Creating network "fabric_test" with the default driver
 Creating volume "net_orderer.example.com" with default driver
 Creating volume "net_peer0.org1.example.com" with default driver
 Creating volume "net_peer0.org2.example.com" with default driver
-Creating orderer.example.com    ... done
 Creating peer0.org2.example.com ... done
+Creating orderer.example.com    ... done
 Creating peer0.org1.example.com ... done
-CONTAINER ID        IMAGE                               COMMAND             CREATED             STATUS                  PORTS                              NAMES
-8d0c74b9d6af        hyperledger/fabric-orderer:latest   "orderer"           4 seconds ago       Up Less than a second   0.0.0.0:7050->7050/tcp             orderer.example.com
-ea1cf82b5b99        hyperledger/fabric-peer:latest      "peer node start"   4 seconds ago       Up Less than a second   0.0.0.0:7051->7051/tcp             peer0.org1.example.com
-cd8d9b23cb56        hyperledger/fabric-peer:latest      "peer node start"   4 seconds ago       Up 1 second             7051/tcp, 0.0.0.0:9051->9051/tcp   peer0.org2.example.com
+Creating cli                    ... done
+CONTAINER ID   IMAGE                               COMMAND             CREATED         STATUS                  PORTS                                            NAMES
+1667543b5634   hyperledger/fabric-tools:latest     "/bin/bash"         1 second ago    Up Less than a second                                                    cli
+b6b117c81c7f   hyperledger/fabric-peer:latest      "peer node start"   2 seconds ago   Up 1 second             0.0.0.0:7051->7051/tcp                           peer0.org1.example.com
+703ead770e05   hyperledger/fabric-orderer:latest   "orderer"           2 seconds ago   Up Less than a second   0.0.0.0:7050->7050/tcp, 0.0.0.0:7053->7053/tcp   orderer.example.com
+718d43f5f312   hyperledger/fabric-peer:latest      "peer node start"   2 seconds ago   Up 1 second             7051/tcp, 0.0.0.0:9051->9051/tcp                 peer0.org2.example.com
 ```
 
 If you don't get this result, jump down to [Troubleshooting](#troubleshooting)
@@ -132,9 +136,8 @@ docker ps -a
 ```
 
 Each node and user that interacts with a Fabric network needs to belong to an
-organization that is a network member. The group of organizations that are
-members of a Fabric network are often referred to as the consortium. The test
-network has two consortium members, Org1 and Org2. The network also includes one
+organization in order to participate in the network. The test
+network includes two peer organizations, Org1 and Org2. It also includes a single
 orderer organization that maintains the ordering service of the network.
 
 [Peers](peers/peers.html) are the fundamental components of any Fabric network.
@@ -142,7 +145,7 @@ Peers store the blockchain ledger and validate transactions before they are
 committed to the ledger. Peers run the smart contracts that contain the business
 logic that is used to manage the assets on the blockchain ledger.
 
-Every peer in the network needs to belong to a member of the consortium. In the
+Every peer in the network needs to belong to an organization. In the
 test network, each organization operates one peer each, `peer0.org1.example.com`
 and `peer0.org2.example.com`.
 
@@ -158,15 +161,12 @@ An ordering service allows peers to focus on validating transactions and
 committing them to the ledger. After ordering nodes receive endorsed transactions
 from clients, they come to consensus on the order of transactions and then add
 them to blocks. The blocks are then distributed to peer nodes, which add the
-blocks the blockchain ledger. Ordering nodes also operate the system channel
-that defines the capabilities of a Fabric network, such as how blocks are made
-and which version of Fabric that nodes can use. The system channel defines which
-organizations are members of the consortium.
+blocks to the blockchain ledger.
 
 The sample network uses a single node Raft ordering service that is operated by
-the ordering organization. You can see the ordering node running on your machine
+the orderer organization. You can see the ordering node running on your machine
 as `orderer.example.com`. While the test network only uses a single node ordering
-service, a real network would have multiple ordering nodes, operated by one or
+service, a production network would have multiple ordering nodes, operated by one or
 multiple orderer organizations. The different ordering nodes would use the Raft
 consensus algorithm to come to agreement on the order of transactions across
 the network.
@@ -206,6 +206,12 @@ the command below to create a second channel named `channel2`:
 ```
 ./network.sh createChannel -c channel2
 ```
+
+**NOTE:** Make sure the name of the channel applies the following restrictions:
+
+  - contains only lower case ASCII alphanumerics, dots '.', and dashes '-'
+  - is shorter than 250 characters
+  - starts with a letter
 
 If you want to bring up the network and create a channel in a single step, you
 can use the `up` and `createChannel` modes together:
@@ -377,7 +383,7 @@ local machine, you can use the tutorials to start developing your own solution:
 
 - Learn how to deploy your own smart contracts to the test network using the
 [Deploying a smart contract to a channel](deploy_chaincode.html) tutorial.
-- Visit the [Writing Your First Application](write_first_app.html) tutorial
+- Visit the [Running a Fabric Application](write_first_app.html) tutorial
 to learn how to use the APIs provided by the Fabric SDKs to invoke smart
 contracts from your client applications.
 - If you are ready to deploy a more complicated smart contract to the network, follow
@@ -523,13 +529,7 @@ below provide a guided tour of what happens when you issue the command of
   the crypto material and MSP folders for all three organizations in the
   `organizations` folder.
 
-- The script uses configtxgen tool to create the system channel genesis block.
-  Configtxgen consumes the `TwoOrgsOrdererGenesis`  channel profile in the
-  `configtx/configtx.yaml` file to create the genesis block. The block is stored
-  in the `system-genesis-block` folder.
-
-- Once the organization crypto material and the system channel genesis block have
-  been generated, the `network.sh` can bring up the nodes of the network. The
+- Once the organization crypto material has been generated, the `network.sh` can bring up the nodes of the network. The
   script uses the ``docker-compose-test-net.yaml`` file in the `docker` folder
   to create the peer and orderer nodes. The `docker` folder also contains the
   ``docker-compose-e2e.yaml`` file that brings up the nodes of the network
@@ -539,11 +539,8 @@ below provide a guided tour of what happens when you issue the command of
 
 - If you use the `createChannel` subcommand, `./network.sh` runs the
   `createChannel.sh` script in the `scripts` folder to create a channel
-  using the supplied channel name. The script uses the `configtx.yaml` file to
-  create the channel creation transaction, as well as two anchor peer update
-  transactions. The script uses the peer cli to create the channel, join
-  ``peer0.org1.example.com`` and ``peer0.org2.example.com`` to the channel, and
-  make both of the peers anchor peers.
+  using the supplied channel name. The script uses the `configtxgen` tool to create the channel genesis block
+  based on the `TwoOrgsApplicationGenesis` channel profile in the `configtx/configtx.yaml` file. After creating the channel, the script uses the peer cli to join ``peer0.org1.example.com`` and ``peer0.org2.example.com`` to the channel, and make both of the peers anchor peers.
 
 - If you issue the `deployCC` command, `./network.sh` runs the ``deployCC.sh``
   script to install the **asset-transfer (basic)** chaincode on both peers and then define then
@@ -626,6 +623,17 @@ If you have any problems with the tutorial, review the following:
    ```
    Select ``y``.
 
+-  If you try to create a channel with the command `./network.sh createChannel`,
+   and it fails with the following error:
+   ```
+   [comm.tls] ClientHandshake -> ERRO 003 Client TLS handshake failed after 1.908956ms with error: EOF remoteaddress=127.0.0.1:7051
+   Error: error getting endorser client for channel: endorser client failed to connect to localhost:7051: failed to create new connection: context deadline exceeded
+   After 5 attempts, peer0.org1 has failed to join channel 'mychannel'
+   ```
+
+   You need to uninstall Docker Desktop and reinstall the recommended version 2.5.0.1. Then, reclone the `fabric-samples`
+   repository before reattempting the commands.
+
 -  If you see an error similar to the following:
    ```
    /bin/bash: ./scripts/createChannel.sh: /bin/bash^M: bad interpreter: No such file or directory
@@ -634,7 +642,7 @@ If you have any problems with the tutorial, review the following:
    Ensure that the file in question (**createChannel.sh** in this example) is
    encoded in the Unix format. This was most likely caused by not setting
    ``core.autocrlf`` to ``false`` in your Git configuration (see
-    [Windows extras](prereqs.html#windows-extras)). There are several ways of fixing this. If you have
+    [Windows](prereqs.html#windows)). There are several ways of fixing this. If you have
    access to the vim editor for instance, open the file:
    ```
    vim ./fabric-samples/test-network/scripts/createChannel.sh
@@ -644,16 +652,6 @@ If you have any problems with the tutorial, review the following:
    ```
    :set ff=unix
    ```
-
-- If your orderer exits upon creation or if you see that the create channel
-  command fails due to an inability to connect to your ordering service, use
-  the `docker logs` command to read the logs from the ordering node. You may see
-  the following message:
-  ```
-  PANI 007 [channel system-channel] config requires unsupported orderer capabilities: Orderer capability V2_0 is required but not supported: Orderer capability V2_0 is required but not supported
-  ```
-  This occurs when you are trying to run the network using Fabric version 1.4.x
-  docker images. The test network needs to run using Fabric version 2.x.
 
 If you continue to see errors, share your logs on the **fabric-questions**
 channel on [Hyperledger Rocket Chat](https://chat.hyperledger.org/home) or on

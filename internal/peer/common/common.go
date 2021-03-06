@@ -31,14 +31,19 @@ import (
 	"github.com/pkg/errors"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	grpc "google.golang.org/grpc"
 )
 
 // UndefinedParamValue defines what undefined parameters in the command line will initialise to
-const UndefinedParamValue = ""
-const CmdRoot = "core"
+const (
+	UndefinedParamValue = ""
+	CmdRoot             = "core"
+)
 
-var mainLogger = flogging.MustGetLogger("main")
-var logOutput = os.Stderr
+var (
+	mainLogger = flogging.MustGetLogger("main")
+	logOutput  = os.Stderr
+)
 
 var (
 	defaultConnTimeout = 3 * time.Second
@@ -78,9 +83,33 @@ var (
 )
 
 type CommonClient struct {
-	*comm.GRPCClient
-	Address string
-	sn      string
+	clientConfig comm.ClientConfig
+	address      string
+}
+
+func newCommonClient(address string, clientConfig comm.ClientConfig) (*CommonClient, error) {
+	return &CommonClient{
+		clientConfig: clientConfig,
+		address:      address,
+	}, nil
+}
+
+func (cc *CommonClient) Certificate() tls.Certificate {
+	if !cc.clientConfig.SecOpts.RequireClientCert {
+		return tls.Certificate{}
+	}
+	cert, err := cc.clientConfig.SecOpts.ClientCertificate()
+	if err != nil {
+		panic(err)
+	}
+	return cert
+}
+
+// Dial will create a new gRPC client connection to the provided
+// address. The options used for the dial are sourced from the
+// ClientConfig provided to the constructor.
+func (cc *CommonClient) Dial(address string) (*grpc.ClientConn, error) {
+	return cc.clientConfig.Dial(address)
 }
 
 func init() {
@@ -231,25 +260,24 @@ func CheckLogLevel(level string) error {
 	return nil
 }
 
-func configFromEnv(prefix string) (address, override string, clientConfig comm.ClientConfig, err error) {
+func configFromEnv(prefix string) (address string, clientConfig comm.ClientConfig, err error) {
 	address = viper.GetString(prefix + ".address")
-	override = viper.GetString(prefix + ".tls.serverhostoverride")
 	clientConfig = comm.ClientConfig{}
 	connTimeout := viper.GetDuration(prefix + ".client.connTimeout")
 	if connTimeout == time.Duration(0) {
 		connTimeout = defaultConnTimeout
 	}
-	clientConfig.Timeout = connTimeout
+	clientConfig.DialTimeout = connTimeout
 	secOpts := comm.SecureOptions{
-		UseTLS:            viper.GetBool(prefix + ".tls.enabled"),
-		RequireClientCert: viper.GetBool(prefix + ".tls.clientAuthRequired"),
-		TimeShift:         viper.GetDuration(prefix + ".tls.handshakeTimeShift"),
+		UseTLS:             viper.GetBool(prefix + ".tls.enabled"),
+		RequireClientCert:  viper.GetBool(prefix + ".tls.clientAuthRequired"),
+		TimeShift:          viper.GetDuration(prefix + ".tls.handshakeTimeShift"),
+		ServerNameOverride: viper.GetString(prefix + ".tls.serverhostoverride"),
 	}
 	if secOpts.UseTLS {
 		caPEM, res := ioutil.ReadFile(config.GetPath(prefix + ".tls.rootcert.file"))
 		if res != nil {
-			err = errors.WithMessage(res,
-				fmt.Sprintf("unable to load %s.tls.rootcert.file", prefix))
+			err = errors.WithMessagef(res, "unable to load %s.tls.rootcert.file", prefix)
 			return
 		}
 		secOpts.ServerRootCAs = [][]byte{caPEM}
@@ -313,9 +341,9 @@ func InitCmd(cmd *cobra.Command, args []string) {
 	}
 
 	// Init the MSP
-	var mspMgrConfigDir = config.GetPath("peer.mspConfigPath")
-	var mspID = viper.GetString("peer.localMspId")
-	var mspType = viper.GetString("peer.localMspType")
+	mspMgrConfigDir := config.GetPath("peer.mspConfigPath")
+	mspID := viper.GetString("peer.localMspId")
+	mspType := viper.GetString("peer.localMspType")
 	if mspType == "" {
 		mspType = msp.ProviderTypeToString(msp.FABRIC)
 	}

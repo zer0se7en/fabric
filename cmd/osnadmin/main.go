@@ -20,7 +20,6 @@ import (
 	"github.com/golang/protobuf/proto"
 	"github.com/hyperledger/fabric-protos-go/common"
 	"github.com/hyperledger/fabric/internal/osnadmin"
-	"github.com/hyperledger/fabric/internal/pkg/comm"
 	"github.com/hyperledger/fabric/protoutil"
 	"gopkg.in/alecthomas/kingpin.v2"
 )
@@ -45,20 +44,24 @@ func executeForArgs(args []string) (output string, exit int, err error) {
 	caFile := app.Flag("ca-file", "Path to file containing PEM-encoded TLS CA certificate(s) for the OSN").String()
 	clientCert := app.Flag("client-cert", "Path to file containing PEM-encoded X509 public key to use for mutual TLS communication with the OSN").String()
 	clientKey := app.Flag("client-key", "Path to file containing PEM-encoded private key to use for mutual TLS communication with the OSN").String()
+	noStatus := app.Flag("no-status", "Remove the HTTP status message from the command output").Default("false").Bool()
 
 	channel := app.Command("channel", "Channel actions")
 
 	join := channel.Command("join", "Join an Ordering Service Node (OSN) to a channel. If the channel does not yet exist, it will be created.")
-	joinChannelID := join.Flag("channel-id", "Channel ID").Short('c').Required().String()
+	joinChannelID := join.Flag("channelID", "Channel ID").Short('c').Required().String()
 	configBlockPath := join.Flag("config-block", "Path to the file containing an up-to-date config block for the channel").Short('b').Required().String()
 
-	list := channel.Command("list", "List channel information for an Ordering Service Node (OSN). If the channel-id flag is set, more detailed information will be provided for that channel.")
-	listChannelID := list.Flag("channel-id", "Channel ID").Short('c').String()
+	list := channel.Command("list", "List channel information for an Ordering Service Node (OSN). If the channelID flag is set, more detailed information will be provided for that channel.")
+	listChannelID := list.Flag("channelID", "Channel ID").Short('c').String()
 
 	remove := channel.Command("remove", "Remove an Ordering Service Node (OSN) from a channel.")
-	removeChannelID := remove.Flag("channel-id", "Channel ID").Short('c').Required().String()
+	removeChannelID := remove.Flag("channelID", "Channel ID").Short('c').Required().String()
 
-	command := kingpin.MustParse(app.Parse(args))
+	command, err := app.Parse(args)
+	if err != nil {
+		return "", 1, err
+	}
 
 	//
 	// flag validation
@@ -77,9 +80,8 @@ func executeForArgs(args []string) (output string, exit int, err error) {
 		if err != nil {
 			return "", 1, fmt.Errorf("reading orderer CA certificate: %s", err)
 		}
-		err = comm.AddPemToCertPool(caFilePEM, caCertPool)
-		if err != nil {
-			return "", 1, fmt.Errorf("adding ca-file PEM to cert pool: %s", err)
+		if !caCertPool.AppendCertsFromPEM(caFilePEM) {
+			return "", 1, fmt.Errorf("failed to add ca-file PEM to cert pool")
 		}
 
 		tlsClientCert, err = tls.LoadX509KeyPair(*clientCert, *clientKey)
@@ -129,19 +131,25 @@ func executeForArgs(args []string) (output string, exit int, err error) {
 		return errorOutput(err), 1, nil
 	}
 
-	return responseOutput(resp.StatusCode, bodyBytes), 0, nil
+	output, err = responseOutput(!*noStatus, resp.StatusCode, bodyBytes)
+	if err != nil {
+		return errorOutput(err), 1, nil
+	}
+
+	return output, 0, nil
 }
 
-func responseOutput(statusCode int, responseBody []byte) string {
-	status := fmt.Sprintf("Status: %d", statusCode)
-
+func responseOutput(showStatus bool, statusCode int, responseBody []byte) (string, error) {
 	var buffer bytes.Buffer
-	json.Indent(&buffer, responseBody, "", "\t")
-	response := fmt.Sprintf("%s", buffer.Bytes())
-
-	output := fmt.Sprintf("%s\n%s", status, response)
-
-	return output
+	if showStatus {
+		fmt.Fprintf(&buffer, "Status: %d\n", statusCode)
+	}
+	if len(responseBody) != 0 {
+		if err := json.Indent(&buffer, responseBody, "", "\t"); err != nil {
+			return "", err
+		}
+	}
+	return buffer.String(), nil
 }
 
 func readBodyBytes(body io.ReadCloser) ([]byte, error) {
@@ -173,7 +181,7 @@ func validateBlockChannelID(blockBytes []byte, channelID string) error {
 	// quick sanity check that the orderer admin is joining
 	// the channel they think they're joining.
 	if channelID != blockChannelID {
-		return fmt.Errorf("specified --channel-id %s does not match channel ID %s in config block", channelID, blockChannelID)
+		return fmt.Errorf("specified --channelID %s does not match channel ID %s in config block", channelID, blockChannelID)
 	}
 
 	return nil

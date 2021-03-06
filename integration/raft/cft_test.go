@@ -27,7 +27,6 @@ import (
 	conftx "github.com/hyperledger/fabric-config/configtx"
 	"github.com/hyperledger/fabric-protos-go/common"
 	"github.com/hyperledger/fabric-protos-go/msp"
-	"github.com/hyperledger/fabric/cmd/common/signer"
 	"github.com/hyperledger/fabric/common/configtx"
 	"github.com/hyperledger/fabric/common/util"
 	"github.com/hyperledger/fabric/integration/nwo"
@@ -381,10 +380,10 @@ var _ = Describe("EndToEnd Crash Fault Tolerance", func() {
 			By("Expiring orderer TLS certificates")
 			for filePath, certPEM := range serverTLSCerts {
 				expiredCert, earlyMadeCACert := expireCertificate(certPEM, ordererTLSCACert, ordererTLSCAKey, time.Now())
-				err = ioutil.WriteFile(filePath, expiredCert, 0600)
+				err = ioutil.WriteFile(filePath, expiredCert, 0o600)
 				Expect(err).NotTo(HaveOccurred())
 
-				err = ioutil.WriteFile(ordererTLSCACertPath, earlyMadeCACert, 0600)
+				err = ioutil.WriteFile(ordererTLSCACertPath, earlyMadeCACert, 0o600)
 				Expect(err).NotTo(HaveOccurred())
 			}
 
@@ -668,19 +667,19 @@ var _ = Describe("EndToEnd Crash Fault Tolerance", func() {
 			Expect(err).NotTo(HaveOccurred())
 
 			expiredAdminCert, earlyCACert := expireCertificate(originalAdminCert, ordererCACert, ordererCAKey, time.Now())
-			err = ioutil.WriteFile(adminCertPath, expiredAdminCert, 0600)
+			err = ioutil.WriteFile(adminCertPath, expiredAdminCert, 0o600)
 			Expect(err).NotTo(HaveOccurred())
 
 			adminPath := filepath.Join(network.RootDir, "crypto", "ordererOrganizations",
 				ordererDomain, "msp", "admincerts", fmt.Sprintf("Admin@%s-cert.pem", ordererDomain))
-			err = ioutil.WriteFile(adminPath, expiredAdminCert, 0600)
+			err = ioutil.WriteFile(adminPath, expiredAdminCert, 0o600)
 			Expect(err).NotTo(HaveOccurred())
 
-			err = ioutil.WriteFile(ordererCACertPath, earlyCACert, 0600)
+			err = ioutil.WriteFile(ordererCACertPath, earlyCACert, 0o600)
 			Expect(err).NotTo(HaveOccurred())
 
 			ordererCACertPath = network.OrdererCACert(orderer)
-			err = ioutil.WriteFile(ordererCACertPath, earlyCACert, 0600)
+			err = ioutil.WriteFile(ordererCACertPath, earlyCACert, 0o600)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Regenerating config")
@@ -758,7 +757,7 @@ var _ = Describe("EndToEnd Crash Fault Tolerance", func() {
 			Expect(block).NotTo(BeNil())
 
 			By("Restore the original admin cert")
-			err = ioutil.WriteFile(adminCertPath, originalAdminCert, 0600)
+			err = ioutil.WriteFile(adminCertPath, originalAdminCert, 0o600)
 			Expect(err).NotTo(HaveOccurred())
 
 			By("Ensure we can fetch the block using our original un-expired admin cert")
@@ -841,7 +840,7 @@ func renewOrdererCertificates(network *nwo.Network, orderers ...*nwo.Orderer) {
 
 	for filePath, certPEM := range serverTLSCerts {
 		renewedCert, _ := expireCertificate(certPEM, ordererTLSCACert, ordererTLSCAKey, time.Now().Add(time.Hour))
-		err = ioutil.WriteFile(filePath, renewedCert, 0600)
+		err = ioutil.WriteFile(filePath, renewedCert, 0o600)
 		Expect(err).NotTo(HaveOccurred())
 	}
 }
@@ -892,35 +891,24 @@ func createConfigTx(txData []byte, channelName string, network *nwo.Network, ord
 	configUpdateEnv, err := configtx.UnmarshalConfigUpdateEnvelope(payload.Data)
 	Expect(err).NotTo(HaveOccurred())
 
-	conf := signer.Config{
-		MSPID:        network.Organization(orderer.Organization).MSPID,
-		IdentityPath: network.OrdererUserCert(orderer, "Admin"),
-		KeyPath:      network.OrdererUserKey(orderer, "Admin"),
-	}
+	signer := network.OrdererUserSigner(orderer, "Admin")
+	signConfigUpdate(signer, configUpdateEnv)
 
-	s, err := signer.NewSigner(conf)
-	Expect(err).NotTo(HaveOccurred())
-
-	signConfigUpdate(conf, configUpdateEnv)
-
-	env, err := protoutil.CreateSignedEnvelope(common.HeaderType_CONFIG_UPDATE, channelName, s, configUpdateEnv, 0, 0)
+	env, err := protoutil.CreateSignedEnvelope(common.HeaderType_CONFIG_UPDATE, channelName, signer, configUpdateEnv, 0, 0)
 	Expect(err).NotTo(HaveOccurred())
 
 	return env
 }
 
-func signConfigUpdate(conf signer.Config, configUpdateEnv *common.ConfigUpdateEnvelope) *common.ConfigUpdateEnvelope {
-	s, err := signer.NewSigner(conf)
-	Expect(err).NotTo(HaveOccurred())
-
-	sigHeader, err := protoutil.NewSignatureHeader(s)
+func signConfigUpdate(signer *nwo.SigningIdentity, configUpdateEnv *common.ConfigUpdateEnvelope) *common.ConfigUpdateEnvelope {
+	sigHeader, err := protoutil.NewSignatureHeader(signer)
 	Expect(err).NotTo(HaveOccurred())
 
 	configSig := &common.ConfigSignature{
 		SignatureHeader: protoutil.MarshalOrPanic(sigHeader),
 	}
 
-	configSig.Signature, err = s.Sign(util.ConcatenateBytes(configSig.SignatureHeader, configUpdateEnv.ConfigUpdate))
+	configSig.Signature, err = signer.Sign(util.ConcatenateBytes(configSig.SignatureHeader, configUpdateEnv.ConfigUpdate))
 	Expect(err).NotTo(HaveOccurred())
 
 	configUpdateEnv.Signatures = append(configUpdateEnv.Signatures, configSig)

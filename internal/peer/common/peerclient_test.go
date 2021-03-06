@@ -28,7 +28,7 @@ func initPeerTestEnv(t *testing.T) (cfgPath string, cleanup func()) {
 	cfgPath, err := ioutil.TempDir("", "peerTestEnv")
 	require.NoError(t, err)
 	certsDir := filepath.Join(cfgPath, "certs")
-	err = os.Mkdir(certsDir, 0755)
+	err = os.Mkdir(certsDir, 0o755)
 	require.NoError(t, err)
 
 	configFile, err := os.Create(filepath.Join(cfgPath, "test.yaml"))
@@ -68,26 +68,26 @@ orderer:
 	require.NoError(t, err)
 
 	caCrtFile := path.Join(certsDir, "ca.crt")
-	err = ioutil.WriteFile(caCrtFile, ca.CertBytes(), 0644)
+	err = ioutil.WriteFile(caCrtFile, ca.CertBytes(), 0o644)
 	require.NoError(t, err)
 
 	kp, err := ca.NewClientCertKeyPair()
 	require.NoError(t, err)
 
 	key := path.Join(certsDir, "client.key")
-	err = ioutil.WriteFile(key, kp.Key, 0644)
+	err = ioutil.WriteFile(key, kp.Key, 0o644)
 	require.NoError(t, err)
 
 	crt := path.Join(certsDir, "client.crt")
-	err = ioutil.WriteFile(crt, kp.Cert, 0644)
+	err = ioutil.WriteFile(crt, kp.Cert, 0o644)
 	require.NoError(t, err)
 
 	ekey := path.Join(certsDir, "empty.key")
-	err = ioutil.WriteFile(ekey, []byte{}, 0644)
+	err = ioutil.WriteFile(ekey, []byte{}, 0o644)
 	require.NoError(t, err)
 
 	ecrt := path.Join(certsDir, "empty.crt")
-	err = ioutil.WriteFile(ecrt, []byte{}, 0644)
+	err = ioutil.WriteFile(ecrt, []byte{}, 0o644)
 	require.NoError(t, err)
 
 	configFile, err = os.Create(filepath.Join(certsDir, "bad.key"))
@@ -130,29 +130,32 @@ func TestNewPeerClientFromEnv(t *testing.T) {
 	require.NotNil(t, pClient)
 
 	// bad key file
+	// This used to be detected when creating the client instead
+	// of when the client connects.
 	badKeyFile := filepath.Join("certs", "bad.key")
 	viper.Set("peer.tls.clientKey.file", badKeyFile)
 	pClient, err = common.NewPeerClientFromEnv()
-	require.Contains(t, err.Error(), "failed to create PeerClient from config")
-	require.Nil(t, pClient)
+	require.NoError(t, err)
+	_, err = pClient.Dial("127.0.0.1:0")
+	require.ErrorContains(t, err, "failed to load client certificate:")
+	require.ErrorContains(t, err, "tls: failed to parse private key")
 
 	// bad cert file path
 	viper.Set("peer.tls.clientCert.file", "./nocert.crt")
 	pClient, err = common.NewPeerClientFromEnv()
-	require.Contains(t, err.Error(), "unable to load peer.tls.clientCert.file")
-	require.Contains(t, err.Error(), "failed to load config for PeerClient")
+	require.ErrorContains(t, err, "unable to load peer.tls.clientCert.file")
 	require.Nil(t, pClient)
 
 	// bad key file path
 	viper.Set("peer.tls.clientKey.file", "./nokey.key")
 	pClient, err = common.NewPeerClientFromEnv()
-	require.Contains(t, err.Error(), "unable to load peer.tls.clientKey.file")
+	require.ErrorContains(t, err, "unable to load peer.tls.clientKey.file")
 	require.Nil(t, pClient)
 
 	// bad ca path
 	viper.Set("peer.tls.rootcert.file", "noroot.crt")
 	pClient, err = common.NewPeerClientFromEnv()
-	require.Contains(t, err.Error(), "unable to load peer.tls.rootcert.file")
+	require.ErrorContains(t, err, "unable to load peer.tls.rootcert.file")
 	require.Nil(t, pClient)
 }
 
@@ -364,7 +367,6 @@ func TestNewPeerClientForAddress(t *testing.T) {
 	pClient, err = common.NewPeerClientForAddress("badPeer", "")
 	require.Contains(t, err.Error(), "unable to load peer.tls.clientKey.file")
 	require.Nil(t, pClient)
-
 }
 
 func TestGetClients_AddressError(t *testing.T) {

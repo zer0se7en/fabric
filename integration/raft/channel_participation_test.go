@@ -243,7 +243,6 @@ var _ = Describe("ChannelParticipation", func() {
 				Height:            6,
 			}))
 
-			consenters = []*nwo.Orderer{orderer2, orderer3}
 			submitPeerTxn(orderer2, peer, network, channelparticipation.ChannelInfo{
 				Name:              "participation-trophy",
 				URL:               "/participation/v1/channels/participation-trophy",
@@ -585,12 +584,12 @@ var _ = Describe("ChannelParticipation", func() {
 			It("recovers from a crash after the join block is written to the pendingops file repo", func() {
 				By("simulating the filesystem state at crash")
 				joinBlockFileRepoPath := filepath.Join(network.OrdererDir(orderer3), "system", "pendingops", "join")
-				err := os.MkdirAll(joinBlockFileRepoPath, 0755)
+				err := os.MkdirAll(joinBlockFileRepoPath, 0o755)
 				Expect(err).NotTo(HaveOccurred())
 				blockPath := filepath.Join(joinBlockFileRepoPath, "participation-trophy.join")
 				configBlockBytes, err := proto.Marshal(configBlock)
 				Expect(err).NotTo(HaveOccurred())
-				err = ioutil.WriteFile(blockPath, configBlockBytes, 0600)
+				err = ioutil.WriteFile(blockPath, configBlockBytes, 0o600)
 				Expect(err).NotTo(HaveOccurred())
 
 				By("starting third orderer")
@@ -612,17 +611,17 @@ var _ = Describe("ChannelParticipation", func() {
 			It("recovers from a crash after the join block is written to the pendingops file repo and the ledger directory (but not the ledger) has been created", func() {
 				By("simulating the filesystem state at crash")
 				joinBlockFileRepoPath := filepath.Join(network.OrdererDir(orderer3), "system", "pendingops", "join")
-				err := os.MkdirAll(joinBlockFileRepoPath, 0755)
+				err := os.MkdirAll(joinBlockFileRepoPath, 0o755)
 				Expect(err).NotTo(HaveOccurred())
 				blockPath := filepath.Join(joinBlockFileRepoPath, "participation-trophy.join")
 				configBlockBytes, err := proto.Marshal(configBlock)
 				Expect(err).NotTo(HaveOccurred())
-				err = ioutil.WriteFile(blockPath, configBlockBytes, 0600)
+				err = ioutil.WriteFile(blockPath, configBlockBytes, 0o600)
 				Expect(err).NotTo(HaveOccurred())
 
 				// create the ledger directory
 				ledgerPath := filepath.Join(network.OrdererDir(orderer3), "system", "chains", "participation-trophy")
-				err = os.MkdirAll(ledgerPath, 0755)
+				err = os.MkdirAll(ledgerPath, 0o755)
 				Expect(err).NotTo(HaveOccurred())
 
 				By("starting third orderer")
@@ -644,12 +643,12 @@ var _ = Describe("ChannelParticipation", func() {
 			It("recovers from a crash after the join block is written to the pendingops file repo and the ledger has been created", func() {
 				By("simulating the filesystem state at crash")
 				joinBlockFileRepoPath := filepath.Join(network.OrdererDir(orderer3), "system", "pendingops", "join")
-				err := os.MkdirAll(joinBlockFileRepoPath, 0755)
+				err := os.MkdirAll(joinBlockFileRepoPath, 0o755)
 				Expect(err).NotTo(HaveOccurred())
 				blockPath := filepath.Join(joinBlockFileRepoPath, "participation-trophy.join")
 				configBlockBytes, err := proto.Marshal(configBlock)
 				Expect(err).NotTo(HaveOccurred())
-				err = ioutil.WriteFile(blockPath, configBlockBytes, 0600)
+				err = ioutil.WriteFile(blockPath, configBlockBytes, 0o600)
 				Expect(err).NotTo(HaveOccurred())
 
 				// create the ledger and add the genesis block

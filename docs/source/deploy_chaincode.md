@@ -4,14 +4,14 @@ End users interact with the blockchain ledger by invoking smart contracts. In Hy
 
 A chaincode is deployed to a channel using a process known as the Fabric chaincode lifecycle. The Fabric chaincode lifecycle allows multiple organizations to agree how a chaincode will be operated before it can be used to create transactions. For example, while an endorsement policy specifies which organizations need to execute a chaincode to validate a transaction, channel members need to use the Fabric chaincode lifecycle to agree on the chaincode endorsement policy. For a more in-depth overview about how to deploy and manage a chaincode on a channel, see [Fabric chaincode lifecycle](./chaincode_lifecycle.html).
 
-You can use this tutorial to learn how to use the [peer lifecycle chaincode commands](./commands/peerlifecycle.html) to deploy a chaincode to a channel of the Fabric test network. Once you have an understanding of the commands, you can use the steps in this tutorial to deploy your own chaincode to the test network, or to deploy chaincode to a production network. In this tutorial, you will deploy the asset-transfer (basic) chaincode that is used by the [Writing your first application tutorial](./write_first_app.html).
+You can use this tutorial to learn how to use the [peer lifecycle chaincode commands](./commands/peerlifecycle.html) to deploy a chaincode to a channel of the Fabric test network. Once you have an understanding of the commands, you can use the steps in this tutorial to deploy your own chaincode to the test network, or to deploy chaincode to a production network. In this tutorial, you will deploy the asset-transfer (basic) chaincode that is used by the [Running a Fabric Application tutorial](./write_first_app.html).
 
 **Note:** These instructions use the Fabric chaincode lifecycle introduced in the v2.0 release. If you would like to use the previous lifecycle to install and instantiate a chaincode, visit the [v1.4 version of the Fabric documentation](https://hyperledger-fabric.readthedocs.io/en/release-1.4).
 
 
 ## Start the network
 
-We will start by deploying an instance of the Fabric test network. Before you begin, make sure that that you have installed the [Prerequisites](prereqs.html) and [Installed the Samples, Binaries and Docker Images](install.html). Use the following command to navigate to the test network directory within your local clone of the `fabric-samples` repository:
+We will start by deploying an instance of the Fabric test network. Before you begin, make sure that that you have installed the necessary software by following the instructions on [getting_started](getting_started.html). Use the following command to navigate to the test network directory within your local clone of the `fabric-samples` repository:
 ```
 cd fabric-samples/test-network
 ```
@@ -31,11 +31,10 @@ The `createChannel` command creates a channel named ``mychannel`` with two chann
 
 We can now use the Peer CLI to deploy the asset-transfer (basic) chaincode to the channel using the following steps:
 
-
-- [Step one: Package the smart contract](#package-the-smart-contract)
-- [Step two: Install the chaincode package](#install-the-chaincode-package)
-- [Step three: Approve a chaincode definition](#approve-a-chaincode-definition)
-- [Step four: Committing the chaincode definition to the channel](#committing-the-chaincode-definition-to-the-channel)
+* [Step one: Package the smart contract](#package-the-smart-contract)
+* [Step two: Install the chaincode package](#install-the-chaincode-package)
+* [Step three: Approve a chaincode definition](#approve-a-chaincode-definition)
+* [Step four: Committing the chaincode definition to the channel](#committing-the-chaincode-definition-to-the-channel)
 
 
 ## Setup Logspout (optional)
@@ -56,7 +55,7 @@ find . -name monitordocker.sh
 
 You can then start Logspout by running the following command:
 ```
-./monitordocker.sh net_test
+./monitordocker.sh fabric_test
 ```
 You should see output similar to the following:
 ```
@@ -369,7 +368,7 @@ The chaincode is built by the peer when the chaincode is installed. The install 
 
 After you install the chaincode package, you need to approve a chaincode definition for your organization. The definition includes the important parameters of chaincode governance such as the name, version, and the chaincode endorsement policy.
 
-The set of channel members who need to approve a chaincode before it can be deployed is governed by the `/Channel/Application/LifeycleEndorsement` policy. By default, this policy requires that a majority of channel members need to approve a chaincode before it can used on a channel. Because we have only two organizations on the channel, and a majority of 2 is 2, we need approve a chaincode definition of asset-transfer (basic) as Org1 and Org2.
+The set of channel members who need to approve a chaincode before it can be deployed is governed by the `/Channel/Application/LifecycleEndorsement` policy. By default, this policy requires that a majority of channel members need to approve a chaincode before it can used on a channel. Because we have only two organizations on the channel, and a majority of 2 is 2, we need approve a chaincode definition of asset-transfer (basic) as Org1 and Org2.
 
 If an organization has installed the chaincode on their peer, they need to include the packageID in the chaincode definition approved by their organization. The package ID is used to associate the chaincode installed on a peer with an approved chaincode definition, and allows an organization to use the chaincode to endorse transactions. You can find the package ID of a chaincode by using the [peer lifecycle chaincode queryinstalled](commands/peerlifecycle.html#peer-lifecycle-chaincode-queryinstalled) command to query your peer.
 ```
@@ -618,7 +617,7 @@ You can then bring down the test network by issuing the following command from t
 
 ## Next steps
 
-After you write your smart contract and deploy it to a channel, you can use the APIs provided by the Fabric SDKs to invoke the smart contracts from a client application. This allows end users to interact with the assets on the blockchain ledger. To get started with the Fabric SDKs, see the [Writing Your first application tutorial](write_first_app.html).
+After you write your smart contract and deploy it to a channel, you can use the APIs provided by the Fabric SDKs to invoke the smart contracts from a client application. This allows end users to interact with the assets on the blockchain ledger. To get started with the Fabric SDKs, see the [Running a Fabric Application tutorial](write_first_app.html).
 
 ## troubleshooting
 

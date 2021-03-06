@@ -18,14 +18,11 @@ import (
 	"github.com/hyperledger/fabric/discovery/protoext"
 	common2 "github.com/hyperledger/fabric/gossip/common"
 	discovery2 "github.com/hyperledger/fabric/gossip/discovery"
-	"github.com/hyperledger/fabric/internal/pkg/comm"
 	"github.com/hyperledger/fabric/protoutil"
 	"github.com/pkg/errors"
 )
 
-var (
-	logger = flogging.MustGetLogger("discovery")
-)
+var logger = flogging.MustGetLogger("discovery")
 
 var accessDenied = wrapError(errors.New("access denied"))
 
@@ -36,7 +33,7 @@ type certHashExtractor func(ctx context.Context) []byte
 // dispatcher defines a function that dispatches a query
 type dispatcher func(q *discovery.Query) *discovery.QueryResult
 
-type service struct {
+type Service struct {
 	config             Config
 	channelDispatchers map[protoext.QueryType]dispatcher
 	localDispatchers   map[protoext.QueryType]dispatcher
@@ -64,8 +61,8 @@ func (c Config) String() string {
 type peerMapping map[string]*discovery.Peer
 
 // NewService creates a new discovery service instance
-func NewService(config Config, sup Support) *service {
-	s := &service{
+func NewService(config Config, sup Support) *Service {
+	s := &Service{
 		auth: newAuthCache(sup, authCacheConfig{
 			enabled:             config.AuthCacheEnabled,
 			maxCacheSize:        config.AuthCacheMaxSize,
@@ -85,9 +82,9 @@ func NewService(config Config, sup Support) *service {
 	return s
 }
 
-func (s *service) Discover(ctx context.Context, request *discovery.SignedRequest) (*discovery.Response, error) {
+func (s *Service) Discover(ctx context.Context, request *discovery.SignedRequest) (*discovery.Response, error) {
 	addr := util.ExtractRemoteAddress(ctx)
-	req, err := validateStructure(ctx, request, s.config.TLS, comm.ExtractCertificateHashFromContext)
+	req, err := validateStructure(ctx, request, s.config.TLS, util.ExtractCertificateHashFromContext)
 	if err != nil {
 		logger.Warningf("Request from %s is malformed or invalid: %v", addr, err)
 		return nil, err
@@ -103,7 +100,7 @@ func (s *service) Discover(ctx context.Context, request *discovery.SignedRequest
 	}, nil
 }
 
-func (s *service) processQuery(query *discovery.Query, request *discovery.SignedRequest, identity []byte, addr string) *discovery.QueryResult {
+func (s *Service) processQuery(query *discovery.Query, request *discovery.SignedRequest, identity []byte, addr string) *discovery.QueryResult {
 	if query.Channel != "" && !s.ChannelExists(query.Channel) {
 		logger.Warning("got query for channel", query.Channel, "from", addr, "but it doesn't exist")
 		return accessDenied
@@ -119,7 +116,7 @@ func (s *service) processQuery(query *discovery.Query, request *discovery.Signed
 	return s.dispatch(query)
 }
 
-func (s *service) dispatch(q *discovery.Query) *discovery.QueryResult {
+func (s *Service) dispatch(q *discovery.Query) *discovery.QueryResult {
 	dispatchers := s.channelDispatchers
 	// Ensure local queries are routed only to channel-less dispatchers
 	if q.Channel == "" {
@@ -132,7 +129,7 @@ func (s *service) dispatch(q *discovery.Query) *discovery.QueryResult {
 	return dispatchQuery(q)
 }
 
-func (s *service) chaincodeQuery(q *discovery.Query) *discovery.QueryResult {
+func (s *Service) chaincodeQuery(q *discovery.Query) *discovery.QueryResult {
 	if err := validateCCQuery(q.GetCcQuery()); err != nil {
 		return wrapError(err)
 	}
@@ -155,7 +152,7 @@ func (s *service) chaincodeQuery(q *discovery.Query) *discovery.QueryResult {
 	}
 }
 
-func (s *service) configQuery(q *discovery.Query) *discovery.QueryResult {
+func (s *Service) configQuery(q *discovery.Query) *discovery.QueryResult {
 	conf, err := s.Config(q.Channel)
 	if err != nil {
 		logger.Errorf("Failed fetching config for channel %s: %v", q.Channel, err)
@@ -178,7 +175,7 @@ func wrapPeerResponse(peersByOrg map[string]*discovery.Peers) *discovery.QueryRe
 	}
 }
 
-func (s *service) channelMembershipResponse(q *discovery.Query) *discovery.QueryResult {
+func (s *Service) channelMembershipResponse(q *discovery.Query) *discovery.QueryResult {
 	chanPeers, err := s.PeersAuthorizedByCriteria(common2.ChannelID(q.Channel), q.GetPeerQuery().Filter)
 	if err != nil {
 		return wrapError(err)
@@ -201,7 +198,7 @@ func (s *service) channelMembershipResponse(q *discovery.Query) *discovery.Query
 	return wrapPeerResponse(membersByOrgs)
 }
 
-func (s *service) localMembershipResponse(q *discovery.Query) *discovery.QueryResult {
+func (s *Service) localMembershipResponse(q *discovery.Query) *discovery.QueryResult {
 	membersByOrgs := make(map[string]*discovery.Peers)
 	for org, ids2Peers := range s.computeMembership(q) {
 		membersByOrgs[org] = &discovery.Peers{}
@@ -212,7 +209,7 @@ func (s *service) localMembershipResponse(q *discovery.Query) *discovery.QueryRe
 	return wrapPeerResponse(membersByOrgs)
 }
 
-func (s *service) computeMembership(_ *discovery.Query) map[string]peerMapping {
+func (s *Service) computeMembership(_ *discovery.Query) map[string]peerMapping {
 	peersByOrg := make(map[string]peerMapping)
 	peerAliveInfo := discovery2.Members(s.Peers()).ByID()
 	for org, peerIdentities := range s.IdentityInfo().ByOrg() {
