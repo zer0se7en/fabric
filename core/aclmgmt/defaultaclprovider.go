@@ -14,7 +14,6 @@ import (
 	"github.com/hyperledger/fabric/common/policies"
 	"github.com/hyperledger/fabric/core/aclmgmt/resources"
 	"github.com/hyperledger/fabric/core/policy"
-	"github.com/hyperledger/fabric/msp/mgmt"
 	"github.com/hyperledger/fabric/protoutil"
 )
 
@@ -48,12 +47,12 @@ func newDefaultACLProvider(policyChecker policy.PolicyChecker) defaultACLProvide
 	}
 
 	//-------------- _lifecycle --------------
-	d.pResourcePolicyMap[resources.Lifecycle_InstallChaincode] = mgmt.Admins
-	d.pResourcePolicyMap[resources.Lifecycle_QueryInstalledChaincode] = mgmt.Admins
-	d.pResourcePolicyMap[resources.Lifecycle_GetInstalledChaincodePackage] = mgmt.Admins
-	d.pResourcePolicyMap[resources.Lifecycle_QueryInstalledChaincodes] = mgmt.Admins
-	d.pResourcePolicyMap[resources.Lifecycle_ApproveChaincodeDefinitionForMyOrg] = mgmt.Admins
-	d.pResourcePolicyMap[resources.Lifecycle_QueryApprovedChaincodeDefinition] = mgmt.Admins
+	d.pResourcePolicyMap[resources.Lifecycle_InstallChaincode] = policy.Admins
+	d.pResourcePolicyMap[resources.Lifecycle_QueryInstalledChaincode] = policy.Admins
+	d.pResourcePolicyMap[resources.Lifecycle_GetInstalledChaincodePackage] = policy.Admins
+	d.pResourcePolicyMap[resources.Lifecycle_QueryInstalledChaincodes] = policy.Admins
+	d.pResourcePolicyMap[resources.Lifecycle_ApproveChaincodeDefinitionForMyOrg] = policy.Admins
+	d.pResourcePolicyMap[resources.Lifecycle_QueryApprovedChaincodeDefinition] = policy.Admins
 
 	d.cResourcePolicyMap[resources.Lifecycle_CommitChaincodeDefinition] = CHANNELWRITERS
 	d.cResourcePolicyMap[resources.Lifecycle_QueryChaincodeDefinition] = CHANNELWRITERS
@@ -61,14 +60,14 @@ func newDefaultACLProvider(policyChecker policy.PolicyChecker) defaultACLProvide
 	d.cResourcePolicyMap[resources.Lifecycle_CheckCommitReadiness] = CHANNELWRITERS
 
 	//-------------- snapshot ---------------
-	d.pResourcePolicyMap[resources.Snapshot_submitrequest] = mgmt.Admins
-	d.pResourcePolicyMap[resources.Snapshot_cancelrequest] = mgmt.Admins
-	d.pResourcePolicyMap[resources.Snapshot_listpending] = mgmt.Admins
+	d.pResourcePolicyMap[resources.Snapshot_submitrequest] = policy.Admins
+	d.pResourcePolicyMap[resources.Snapshot_cancelrequest] = policy.Admins
+	d.pResourcePolicyMap[resources.Snapshot_listpending] = policy.Admins
 
 	//-------------- LSCC --------------
 	//p resources (implemented by the chaincode currently)
-	d.pResourcePolicyMap[resources.Lscc_Install] = mgmt.Admins
-	d.pResourcePolicyMap[resources.Lscc_GetInstalledChaincodes] = mgmt.Admins
+	d.pResourcePolicyMap[resources.Lscc_Install] = policy.Admins
+	d.pResourcePolicyMap[resources.Lscc_GetInstalledChaincodes] = policy.Admins
 
 	// c resources
 	d.cResourcePolicyMap[resources.Lscc_Deploy] = ""  // ACL check covered by PROPOSAL
@@ -91,10 +90,10 @@ func newDefaultACLProvider(policyChecker policy.PolicyChecker) defaultACLProvide
 
 	//--------------- CSCC resources -----------
 	//p resources (implemented by the chaincode currently)
-	d.pResourcePolicyMap[resources.Cscc_JoinChain] = mgmt.Admins
-	d.pResourcePolicyMap[resources.Cscc_JoinChainBySnapshot] = mgmt.Admins
-	d.pResourcePolicyMap[resources.Cscc_JoinBySnapshotStatus] = mgmt.Admins
-	d.pResourcePolicyMap[resources.Cscc_GetChannels] = mgmt.Members
+	d.pResourcePolicyMap[resources.Cscc_JoinChain] = policy.Admins
+	d.pResourcePolicyMap[resources.Cscc_JoinChainBySnapshot] = policy.Admins
+	d.pResourcePolicyMap[resources.Cscc_JoinBySnapshotStatus] = policy.Admins
+	d.pResourcePolicyMap[resources.Cscc_GetChannels] = policy.Members
 
 	// c resources
 	d.cResourcePolicyMap[resources.Cscc_GetConfigBlock] = CHANNELREADERS
@@ -108,6 +107,10 @@ func newDefaultACLProvider(policyChecker policy.PolicyChecker) defaultACLProvide
 	// Event resources
 	d.cResourcePolicyMap[resources.Event_Block] = CHANNELREADERS
 	d.cResourcePolicyMap[resources.Event_FilteredBlock] = CHANNELREADERS
+
+	// Gateway resources
+	d.cResourcePolicyMap[resources.Gateway_CommitStatus] = CHANNELREADERS
+	d.cResourcePolicyMap[resources.Gateway_ChaincodeEvents] = CHANNELREADERS
 
 	return d
 }
@@ -130,6 +133,7 @@ func (d *defaultACLProviderImpl) CheckACL(resName string, channelID string, idin
 			return fmt.Errorf("Unmapped policy for %s", resName)
 		}
 	}
+	aclLogger.Debugw("Applying default access policy for resource", "channel", channelID, "policy", policy, "resource", resName)
 
 	switch typedData := idinfo.(type) {
 	case *pb.SignedProposal:
@@ -140,6 +144,8 @@ func (d *defaultACLProviderImpl) CheckACL(resName string, channelID string, idin
 			return err
 		}
 		return d.policyChecker.CheckPolicyBySignedData(channelID, policy, sd)
+	case *protoutil.SignedData:
+		return d.policyChecker.CheckPolicyBySignedData(channelID, policy, []*protoutil.SignedData{typedData})
 	case []*protoutil.SignedData:
 		return d.policyChecker.CheckPolicyBySignedData(channelID, policy, typedData)
 	default:

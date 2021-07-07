@@ -163,8 +163,8 @@ type PeerLedger interface {
 	GetBlockByHash(blockHash []byte) (*common.Block, error)
 	// GetBlockByTxID returns a block which contains a transaction
 	GetBlockByTxID(txID string) (*common.Block, error)
-	// GetTxValidationCodeByTxID returns reason code of transaction validation
-	GetTxValidationCodeByTxID(txID string) (peer.TxValidationCode, error)
+	// GetTxValidationCodeByTxID returns transaction validation code and block number in which the transaction was committed
+	GetTxValidationCodeByTxID(txID string) (peer.TxValidationCode, uint64, error)
 	// NewTxSimulator gives handle to a transaction simulator.
 	// A client can obtain more than one 'TxSimulator's for parallel execution.
 	// Any snapshoting/synchronization should be performed at the implementation level if required
@@ -215,6 +215,13 @@ type PeerLedger interface {
 	CancelSnapshotRequest(height uint64) error
 	// PendingSnapshotRequests returns a list of heights for the pending (or under processing) snapshot requests.
 	PendingSnapshotRequests() ([]uint64, error)
+	// CommitNotificationsChannel returns a read-only channel on which ledger sends a `CommitNotification`
+	// when a block is committed. The CommitNotification contains entries for the transactions from the committed block,
+	// which are not malformed, carry a legitimate TxID, and in addition, are not marked as a duplicate transaction.
+	// The consumer can close the 'done' channel to signal that the notifications are no longer needed. This will cause the
+	// CommitNotifications channel to close. There is expected to be only one consumer at a time. The function returns error
+	// if already a CommitNotification channel is active.
+	CommitNotificationsChannel(done <-chan struct{}) (<-chan *CommitNotification, error)
 }
 
 // SimpleQueryExecutor encapsulates basic functions
@@ -724,6 +731,26 @@ func (e *InvalidTxError) Error() string {
 // Currently works at a stepping stone to decrease surface area of bccsp
 type HashProvider interface {
 	GetHash(opts bccsp.HashOpts) (hash.Hash, error)
+}
+
+// CommitNotification is sent on each block commit to the channel returned by PeerLedger.CommitNotificationsChannel().
+// TxsInfo field contains the info about individual transactions in the block in the order the transactions appear in the block
+// The transactions with a unique and non-empty txID are included in the notification
+type CommitNotification struct {
+	BlockNumber uint64
+	TxsInfo     []*CommitNotificationTxInfo
+}
+
+// CommitNotificationTxInfo contains the details of a transaction that is included in the CommitNotification
+// ChaincodeID will be nil if the transaction is not an endorser transaction. This may or may not be nil if the tranasction is invalid.
+// Specifically, it will be nil if the transaction is marked invalid by the validator (e.g., bad payload or insufficient endorements) and it will be non-nil if the transaction is marked invalid for concurrency conflicts.
+// However, it is guaranteed be non-nil if the transaction is a valid endorser transaction.
+type CommitNotificationTxInfo struct {
+	TxType             common.HeaderType
+	TxID               string
+	ValidationCode     peer.TxValidationCode
+	ChaincodeID        *peer.ChaincodeID
+	ChaincodeEventData []byte
 }
 
 //go:generate counterfeiter -o mock/state_listener.go -fake-name StateListener . StateListener

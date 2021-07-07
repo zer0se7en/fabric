@@ -1450,9 +1450,9 @@ func (m *mockLedger) GetBlockByTxID(txID string) (*common.Block, error) {
 }
 
 // GetTxValidationCodeByTxID returns validation code of give tx
-func (m *mockLedger) GetTxValidationCodeByTxID(txID string) (peer.TxValidationCode, error) {
+func (m *mockLedger) GetTxValidationCodeByTxID(txID string) (peer.TxValidationCode, uint64, error) {
 	args := m.Called(txID)
-	return args.Get(0).(peer.TxValidationCode), nil
+	return args.Get(0).(peer.TxValidationCode), args.Get(1).(uint64), nil
 }
 
 // NewTxSimulator creates new transaction simulator
@@ -1542,6 +1542,10 @@ func (m *mockLedger) PendingSnapshotRequests() ([]uint64, error) {
 
 func (m *mockLedger) CancelSnapshotRequest(height uint64) error {
 	return nil
+}
+
+func (m *mockLedger) CommitNotificationsChannel(done <-chan struct{}) (<-chan *ledger.CommitNotification, error) {
+	return nil, nil
 }
 
 // mockQueryExecutor mock of the query executor,

@@ -43,6 +43,7 @@ type Provider struct {
 	softVerify bool
 	immutable  bool
 
+	getKeyIDForSKI          func(ski []byte) []byte
 	createSessionRetries    int
 	createSessionRetryDelay time.Duration
 
@@ -58,6 +59,19 @@ type Provider struct {
 // Ensure we satisfy the BCCSP interfaces.
 var _ bccsp.BCCSP = (*Provider)(nil)
 
+// An Option is used to configure the Provider.
+type Option func(p *Provider) error
+
+// WithKeyMapper returns an option that configures the Provider to use the
+// provided function to map a subject key identifier to a cryptoki CKA_ID
+// identifer.
+func WithKeyMapper(mapper func([]byte) []byte) Option {
+	return func(p *Provider) error {
+		p.getKeyIDForSKI = mapper
+		return nil
+	}
+}
+
 // New returns a new instance of a BCCSP that uses PKCS#11 standard interfaces
 // to generate and use elliptic curve key pairs for signing and verification using
 // curves that satisfy the requested security level from opts.
@@ -65,7 +79,7 @@ var _ bccsp.BCCSP = (*Provider)(nil)
 // All other cryptographic functions are delegated to a software based BCCSP
 // implementation that is configured to use the security level and hashing
 // familly from opts and the key store that is provided.
-func New(opts PKCS11Opts, keyStore bccsp.KeyStore) (*Provider, error) {
+func New(opts PKCS11Opts, keyStore bccsp.KeyStore, options ...Option) (*Provider, error) {
 	curve, err := curveForSecurityLevel(opts.Security)
 	if err != nil {
 		return nil, errors.Wrapf(err, "Failed initializing configuration")
@@ -94,6 +108,7 @@ func New(opts PKCS11Opts, keyStore bccsp.KeyStore) (*Provider, error) {
 	csp := &Provider{
 		BCCSP:                   swCSP,
 		curve:                   curve,
+		getKeyIDForSKI:          func(ski []byte) []byte { return ski },
 		createSessionRetries:    opts.createSessionRetries,
 		createSessionRetryDelay: opts.createSessionRetryDelay,
 		sessPool:                sessPool,
@@ -102,6 +117,12 @@ func New(opts PKCS11Opts, keyStore bccsp.KeyStore) (*Provider, error) {
 		keyCache:                map[string]bccsp.Key{},
 		softVerify:              opts.SoftwareVerify,
 		immutable:               opts.Immutable,
+	}
+
+	for _, o := range options {
+		if err := o(csp); err != nil {
+			return nil, err
+		}
 	}
 
 	return csp.initialize(opts)
@@ -271,12 +292,11 @@ func (csp *Provider) Verify(k bccsp.Key, signature, digest []byte, opts bccsp.Si
 		return false, errors.New("Invalid digest. Cannot be empty")
 	}
 
-	// Check key type
-	switch key := k.(type) {
-	case *ecdsaPrivateKey:
-		return csp.verifyECDSA(key.pub, signature, digest)
-	case *ecdsaPublicKey:
-		return csp.verifyECDSA(*key, signature, digest)
+	// key (k) will never be a pkcs11 key, do verify using the software implementation
+	// but validate it just in case
+	switch k.(type) {
+	case *ecdsaPrivateKey, *ecdsaPublicKey:
+		return false, errors.New("Unexpected pkcs11 key, expected software based key")
 	default:
 		return csp.BCCSP.Verify(k, signature, digest, opts)
 	}
@@ -400,7 +420,7 @@ func (csp *Provider) getECKey(ski []byte) (pubKey *ecdsa.PublicKey, isPriv bool,
 	curveOid := new(asn1.ObjectIdentifier)
 	_, err = asn1.Unmarshal(marshaledOid, curveOid)
 	if err != nil {
-		return nil, false, fmt.Errorf("failed Unmarshaling Curve OID [%s]\n%s", err.Error(), hex.EncodeToString(marshaledOid))
+		return nil, false, fmt.Errorf("failed Unmarshalling Curve OID [%s]\n%s", err.Error(), hex.EncodeToString(marshaledOid))
 	}
 
 	curve := namedCurveFromOID(*curveOid)
@@ -409,7 +429,7 @@ func (csp *Provider) getECKey(ski []byte) (pubKey *ecdsa.PublicKey, isPriv bool,
 	}
 	x, y := elliptic.Unmarshal(curve, ecpt)
 	if x == nil {
-		return nil, false, fmt.Errorf("failed Unmarshaling Public Key")
+		return nil, false, fmt.Errorf("failed Unmarshalling Public Key")
 	}
 
 	pubKey = &ecdsa.PublicKey{Curve: curve, X: x, Y: y}
@@ -569,7 +589,7 @@ func (csp *Provider) generateECKey(curve asn1.ObjectIdentifier, ephemeral bool) 
 	}
 	x, y := elliptic.Unmarshal(nistCurve, ecpt)
 	if x == nil {
-		return nil, nil, fmt.Errorf("Failed Unmarshaling Public Key")
+		return nil, nil, fmt.Errorf("Failed Unmarshalling Public Key")
 	}
 
 	pubGoKey := &ecdsa.PublicKey{Curve: nistCurve, X: x, Y: y}
@@ -699,7 +719,7 @@ func (csp *Provider) findKeyPairFromSKI(session pkcs11.SessionHandle, ski []byte
 
 	template := []*pkcs11.Attribute{
 		pkcs11.NewAttribute(pkcs11.CKA_CLASS, ktype),
-		pkcs11.NewAttribute(pkcs11.CKA_ID, ski),
+		pkcs11.NewAttribute(pkcs11.CKA_ID, csp.getKeyIDForSKI(ski)),
 	}
 	if err := csp.ctx.FindObjectsInit(session, template); err != nil {
 		return 0, err

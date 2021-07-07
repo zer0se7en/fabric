@@ -6,9 +6,9 @@
 #
 
 # if version not passed in, default to latest released version
-VERSION=2.3.1
+VERSION=2.3.2
 # if ca version not passed in, default to latest released version
-CA_VERSION=1.4.9
+CA_VERSION=1.5.0
 ARCH=$(echo "$(uname -s|tr '[:upper:]' '[:lower:]'|sed 's/mingw64_nt.*/windows/')-$(uname -m | sed 's/x86_64/amd64/g')")
 MARCH=$(uname -m)
 
@@ -21,8 +21,8 @@ printHelp() {
     echo "-s : bypass fabric-samples repo clone"
     echo "-b : bypass download of platform-specific binaries"
     echo
-    echo "e.g. bootstrap.sh 2.3.1 1.4.9 -s"
-    echo "will download docker images and binaries for Fabric v2.3.1 and Fabric CA v1.4.9"
+    echo "e.g. bootstrap.sh 2.3.2 1.5.0 -s"
+    echo "will download docker images and binaries for Fabric v2.3.2 and Fabric CA v1.5.0"
 }
 
 # dockerPull() pulls docker images from fabric and chaincode repositories
@@ -59,15 +59,15 @@ cloneSamplesRepo() {
         cd fabric-samples
     else
         echo "===> Cloning hyperledger/fabric-samples repo"
-        git clone -b master https://github.com/hyperledger/fabric-samples.git && cd fabric-samples
+        git clone -b main https://github.com/hyperledger/fabric-samples.git && cd fabric-samples
     fi
 
     if GIT_DIR=.git git rev-parse v${VERSION} >/dev/null 2>&1; then
         echo "===> Checking out v${VERSION} of hyperledger/fabric-samples"
         git checkout -q v${VERSION}
     else
-        echo "fabric-samples v${VERSION} does not exist, defaulting master"
-        git checkout -q master
+        echo "fabric-samples v${VERSION} does not exist, defaulting main"
+        git checkout -q main
     fi
 }
 

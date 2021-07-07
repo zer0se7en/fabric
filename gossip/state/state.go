@@ -103,7 +103,7 @@ type ledgerResources interface {
 	// returns missing transaction ids
 	StoreBlock(block *common.Block, data util.PvtDataCollections) error
 
-	// StorePvtData used to persist private date into transient store
+	// StorePvtData used to persist private data into transient store
 	StorePvtData(txid string, privData *transientstore.TxPvtReadWriteSetWithConfigInfo, blckHeight uint64) error
 
 	// GetPvtDataAndBlockByNum gets block by number and also returns all related private data
@@ -503,7 +503,7 @@ func (s *GossipStateProviderImpl) handleStateResponse(msg protoext.ReceivedMessa
 		s.logger.Debugf("Received payload with sequence number %d.", payload.SeqNum)
 		block, err := protoutil.UnmarshalBlock(payload.Data)
 		if err != nil {
-			s.logger.Warningf("Error unmarshaling payload to block for sequence number %d, due to %+v", payload.SeqNum, err)
+			s.logger.Warningf("Error unmarshalling payload to block for sequence number %d, due to %+v", payload.SeqNum, err)
 			return uint64(0), err
 		}
 

@@ -4,7 +4,7 @@
 
 name: $(SourceBranchName)-$(Date:yyyyMMdd)$(Rev:.rrr)
 trigger:
-- master
+- main
 - release-2.*
 pr: none
 
@@ -16,7 +16,7 @@ variables:
 jobs:
   - job: UnitTests
     pool:
-      vmImage: ubuntu-18.04
+      vmImage: ubuntu-20.04
     steps:
       - template: install_deps.yml
       - checkout: self

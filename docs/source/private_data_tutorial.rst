@@ -29,7 +29,7 @@ configuring and using private data with Fabric:
 #. :ref:`pd-indexes`
 #. :ref:`pd-ref-material`
 
-This tutorial will deploy the `asset transfer private data sample <https://github.com/hyperledger/fabric-samples/tree/master/asset-transfer-private-data/chaincode-go>`__
+This tutorial will deploy the `asset transfer private data sample <https://github.com/hyperledger/fabric-samples/tree/main/asset-transfer-private-data/chaincode-go>`__
 to the Fabric test network to demonstrate how to create, deploy, and use a collection of
 private data.
 You should have completed the task :doc:`install`.
@@ -975,6 +975,11 @@ installed on a peer and instantiated on a channel. The associated indexes are
 automatically deployed upon chaincode instantiation on the channel when
 the  ``--collections-config`` flag is specified pointing to the location of
 the collection JSON file.
+
+.. note:: It is not possible to create an index for use with an implict private data collection.
+          An implicit collection is based on the organizations name and is created automatically. The format of the name
+          is ``_implicit_org_<OrgsMSPid>``
+          Please see `FAB-17916 <https://jira.hyperledger.org/browse/FAB-17916>`__ for more information.
 
 Clean up
 --------

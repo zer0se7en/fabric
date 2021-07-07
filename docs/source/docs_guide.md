@@ -96,17 +96,17 @@ fabric/docs
 ```
 
 Spend a little time navigating the [docs
-folder](https://github.com/hyperledger/fabric/tree/master/docs) in the
+folder](https://github.com/hyperledger/fabric/tree/main/docs) in the
 Hyperledger Fabric repository. Click on the following links to see how different
 source files map to their corresponding published topics.
 
-* [`/docs/source/index.rst`](https://raw.githubusercontent.com/hyperledger/fabric/master/docs/source/index.rst) maps to [Hyperledger Fabric title page](https://hyperledger-fabric.readthedocs.io/en/{RTD_TAG}/)
+* [`/docs/source/index.rst`](https://raw.githubusercontent.com/hyperledger/fabric/main/docs/source/index.rst) maps to [Hyperledger Fabric title page](https://hyperledger-fabric.readthedocs.io/en/{RTD_TAG}/)
 
-* [`/docs/source/developapps/developing-applications.rst`](https://raw.githubusercontent.com/hyperledger/fabric/master/docs/source/developapps/developing_applications.rst)
+* [`/docs/source/developapps/developing-applications.rst`](https://raw.githubusercontent.com/hyperledger/fabric/main/docs/source/developapps/developing_applications.rst)
   maps to [Developing
   applications](https://hyperledger-fabric.readthedocs.io/en/{RTD_TAG}/developapps/developing_applications.html)
 
-* [`/docs/source/peers/peers.md`](https://raw.githubusercontent.com/hyperledger/fabric/master/docs/source/peers/peers.md)
+* [`/docs/source/peers/peers.md`](https://raw.githubusercontent.com/hyperledger/fabric/main/docs/source/peers/peers.md)
   maps to
   [Peers](https://hyperledger-fabric.readthedocs.io/en/{RTD_TAG}/peers/peers.html)
 
@@ -205,13 +205,14 @@ your GitHub account.
    For International Languages (Malayalam as an example):
    ```bash
    git clone git@github.com:hyperledger/fabric-docs-i18n.git
-   cd fabric
+   cd fabric-docs-i18n
    make docs-lang-ml_IN
    ```
 
-   The `make` command generates documentation html files in the `build/html/`
+   The `make` command generates documentation html files in the `docs/build/html/`
    folder which you can now view locally; simply navigate your browser to the
-   `build/html/index.html` file.
+   `docs/build/html/index.html` file. For International Languages, you need to read `docs/build/html/` as
+   `docs/locale/${LANG_CODE}/_build/html/` (e.g., `docs/locale/ml_IN/_build/html/`).
 
 4. Now make a small change to a file, and rebuild the documentation to verify
    that your change was as expected. Every time you make a change to the
@@ -222,7 +223,7 @@ your GitHub account.
 
    ```bash
    sudo apt-get install apache2
-   cd build/html
+   cd docs/build/html
    sudo cp -r * /var/www/html/
    ```
 
@@ -240,21 +241,19 @@ them for approval. The following instructions show you how to use ReadTheDocs to
 do this.
 
 1. Go to [`http://readthedocs.org`](http://readthedocs.org) and sign up for an
-   account.
-2. Create a project. Your username will preface the URL and you may want to
-   append `-fabric` to ensure that you can distinguish between this and other
-   docs that you need to create for other projects. So for example:
-   `YOURGITHUBID-fabric.readthedocs.io/en/{BRANCH_DOC}`.
-3. Click `Admin`, click `Integrations`, click `Add integration`, choose `GitHub
-   incoming webhook`, then click `Add integration`.
-4. Fork the [`fabric`](https://github.com/hyperledger/fabric) repository.
+   account. Choose the "sign up with GitHub" option.
+2. Fork the [`fabric`](https://github.com/hyperledger/fabric) repository.
+3. Import a project. Select your fork of the fabric repository. You will need to
+   create a unique name for the project, such as YOUR_USERNAME-fabric.
+4. Check in the `Admin`, `Integrations` settings to verify you have one `GitHub
+   incoming webhook`.
 5. From your fork, go to `Settings` in the upper right portion of the screen.
 6. Click `Webhooks`.
-7. Click `Add webhook`.
-8. Add the ReadTheDocs's URL into `Payload URL`.
-9. Choose `Let me select individual events`:`Pushes`、`Branch or tag creation`、
-   `Branch or tag deletion`.
-10. Click `Add webhook`.
+7. Find your new webhook. It will begin with
+  `https://readthedocs.org/api/v2/webhook/YOUR_PROJECT_NAME`
+8. Scroll to the `Which events would you like to trigger this webhook?` setting
+   and unselect `Pull requests`.
+9. Click `Update webhook`.
 
 Use `fabric-docs-i18n` instead of `fabric` in the above instructions if you're
 building an international language translation.
@@ -282,11 +281,11 @@ Japanese translation must be approved by a Japanese maintainer, and so on. You
 can find the maintainers listed in the following `CODEOWNERS` files:
 
 * US English
-  [`CODEOWNERS`](https://github.com/hyperledger/fabric/blob/master/CODEOWNERS)
+  [`CODEOWNERS`](https://github.com/hyperledger/fabric/blob/main/CODEOWNERS)
   and their [maintainer GitHub
   IDs](https://github.com/orgs/hyperledger/teams/fabric-core-doc-maintainers)
 * International language
-  [`CODEOWNERS`](https://github.com/hyperledger/fabric-docs-i18n/blob/master/CODEOWNERS)
+  [`CODEOWNERS`](https://github.com/hyperledger/fabric-docs-i18n/blob/main/CODEOWNERS)
   and their [maintainer GitHub
   IDs](https://github.com/orgs/hyperledger/teams/fabric-contributors)
 

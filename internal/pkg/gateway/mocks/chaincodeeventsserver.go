@@ -5,11 +5,11 @@ import (
 	"context"
 	"sync"
 
-	gatewaya "github.com/hyperledger/fabric-protos-go/gateway"
+	"github.com/hyperledger/fabric-protos-go/gateway"
 	"google.golang.org/grpc/metadata"
 )
 
-type SubmitServer struct {
+type ChaincodeEventsServer struct {
 	ContextStub        func() context.Context
 	contextMutex       sync.RWMutex
 	contextArgsForCall []struct {
@@ -31,10 +31,10 @@ type SubmitServer struct {
 	recvMsgReturnsOnCall map[int]struct {
 		result1 error
 	}
-	SendStub        func(*gatewaya.Event) error
+	SendStub        func(*gateway.ChaincodeEventsResponse) error
 	sendMutex       sync.RWMutex
 	sendArgsForCall []struct {
-		arg1 *gatewaya.Event
+		arg1 *gateway.ChaincodeEventsResponse
 	}
 	sendReturns struct {
 		result1 error
@@ -84,36 +84,37 @@ type SubmitServer struct {
 	invocationsMutex sync.RWMutex
 }
 
-func (fake *SubmitServer) Context() context.Context {
+func (fake *ChaincodeEventsServer) Context() context.Context {
 	fake.contextMutex.Lock()
 	ret, specificReturn := fake.contextReturnsOnCall[len(fake.contextArgsForCall)]
 	fake.contextArgsForCall = append(fake.contextArgsForCall, struct {
 	}{})
+	stub := fake.ContextStub
+	fakeReturns := fake.contextReturns
 	fake.recordInvocation("Context", []interface{}{})
 	fake.contextMutex.Unlock()
-	if fake.ContextStub != nil {
-		return fake.ContextStub()
+	if stub != nil {
+		return stub()
 	}
 	if specificReturn {
 		return ret.result1
 	}
-	fakeReturns := fake.contextReturns
 	return fakeReturns.result1
 }
 
-func (fake *SubmitServer) ContextCallCount() int {
+func (fake *ChaincodeEventsServer) ContextCallCount() int {
 	fake.contextMutex.RLock()
 	defer fake.contextMutex.RUnlock()
 	return len(fake.contextArgsForCall)
 }
 
-func (fake *SubmitServer) ContextCalls(stub func() context.Context) {
+func (fake *ChaincodeEventsServer) ContextCalls(stub func() context.Context) {
 	fake.contextMutex.Lock()
 	defer fake.contextMutex.Unlock()
 	fake.ContextStub = stub
 }
 
-func (fake *SubmitServer) ContextReturns(result1 context.Context) {
+func (fake *ChaincodeEventsServer) ContextReturns(result1 context.Context) {
 	fake.contextMutex.Lock()
 	defer fake.contextMutex.Unlock()
 	fake.ContextStub = nil
@@ -122,7 +123,7 @@ func (fake *SubmitServer) ContextReturns(result1 context.Context) {
 	}{result1}
 }
 
-func (fake *SubmitServer) ContextReturnsOnCall(i int, result1 context.Context) {
+func (fake *ChaincodeEventsServer) ContextReturnsOnCall(i int, result1 context.Context) {
 	fake.contextMutex.Lock()
 	defer fake.contextMutex.Unlock()
 	fake.ContextStub = nil
@@ -136,44 +137,45 @@ func (fake *SubmitServer) ContextReturnsOnCall(i int, result1 context.Context) {
 	}{result1}
 }
 
-func (fake *SubmitServer) RecvMsg(arg1 interface{}) error {
+func (fake *ChaincodeEventsServer) RecvMsg(arg1 interface{}) error {
 	fake.recvMsgMutex.Lock()
 	ret, specificReturn := fake.recvMsgReturnsOnCall[len(fake.recvMsgArgsForCall)]
 	fake.recvMsgArgsForCall = append(fake.recvMsgArgsForCall, struct {
 		arg1 interface{}
 	}{arg1})
+	stub := fake.RecvMsgStub
+	fakeReturns := fake.recvMsgReturns
 	fake.recordInvocation("RecvMsg", []interface{}{arg1})
 	fake.recvMsgMutex.Unlock()
-	if fake.RecvMsgStub != nil {
-		return fake.RecvMsgStub(arg1)
+	if stub != nil {
+		return stub(arg1)
 	}
 	if specificReturn {
 		return ret.result1
 	}
-	fakeReturns := fake.recvMsgReturns
 	return fakeReturns.result1
 }
 
-func (fake *SubmitServer) RecvMsgCallCount() int {
+func (fake *ChaincodeEventsServer) RecvMsgCallCount() int {
 	fake.recvMsgMutex.RLock()
 	defer fake.recvMsgMutex.RUnlock()
 	return len(fake.recvMsgArgsForCall)
 }
 
-func (fake *SubmitServer) RecvMsgCalls(stub func(interface{}) error) {
+func (fake *ChaincodeEventsServer) RecvMsgCalls(stub func(interface{}) error) {
 	fake.recvMsgMutex.Lock()
 	defer fake.recvMsgMutex.Unlock()
 	fake.RecvMsgStub = stub
 }
 
-func (fake *SubmitServer) RecvMsgArgsForCall(i int) interface{} {
+func (fake *ChaincodeEventsServer) RecvMsgArgsForCall(i int) interface{} {
 	fake.recvMsgMutex.RLock()
 	defer fake.recvMsgMutex.RUnlock()
 	argsForCall := fake.recvMsgArgsForCall[i]
 	return argsForCall.arg1
 }
 
-func (fake *SubmitServer) RecvMsgReturns(result1 error) {
+func (fake *ChaincodeEventsServer) RecvMsgReturns(result1 error) {
 	fake.recvMsgMutex.Lock()
 	defer fake.recvMsgMutex.Unlock()
 	fake.RecvMsgStub = nil
@@ -182,7 +184,7 @@ func (fake *SubmitServer) RecvMsgReturns(result1 error) {
 	}{result1}
 }
 
-func (fake *SubmitServer) RecvMsgReturnsOnCall(i int, result1 error) {
+func (fake *ChaincodeEventsServer) RecvMsgReturnsOnCall(i int, result1 error) {
 	fake.recvMsgMutex.Lock()
 	defer fake.recvMsgMutex.Unlock()
 	fake.RecvMsgStub = nil
@@ -196,44 +198,45 @@ func (fake *SubmitServer) RecvMsgReturnsOnCall(i int, result1 error) {
 	}{result1}
 }
 
-func (fake *SubmitServer) Send(arg1 *gatewaya.Event) error {
+func (fake *ChaincodeEventsServer) Send(arg1 *gateway.ChaincodeEventsResponse) error {
 	fake.sendMutex.Lock()
 	ret, specificReturn := fake.sendReturnsOnCall[len(fake.sendArgsForCall)]
 	fake.sendArgsForCall = append(fake.sendArgsForCall, struct {
-		arg1 *gatewaya.Event
+		arg1 *gateway.ChaincodeEventsResponse
 	}{arg1})
+	stub := fake.SendStub
+	fakeReturns := fake.sendReturns
 	fake.recordInvocation("Send", []interface{}{arg1})
 	fake.sendMutex.Unlock()
-	if fake.SendStub != nil {
-		return fake.SendStub(arg1)
+	if stub != nil {
+		return stub(arg1)
 	}
 	if specificReturn {
 		return ret.result1
 	}
-	fakeReturns := fake.sendReturns
 	return fakeReturns.result1
 }
 
-func (fake *SubmitServer) SendCallCount() int {
+func (fake *ChaincodeEventsServer) SendCallCount() int {
 	fake.sendMutex.RLock()
 	defer fake.sendMutex.RUnlock()
 	return len(fake.sendArgsForCall)
 }
 
-func (fake *SubmitServer) SendCalls(stub func(*gatewaya.Event) error) {
+func (fake *ChaincodeEventsServer) SendCalls(stub func(*gateway.ChaincodeEventsResponse) error) {
 	fake.sendMutex.Lock()
 	defer fake.sendMutex.Unlock()
 	fake.SendStub = stub
 }
 
-func (fake *SubmitServer) SendArgsForCall(i int) *gatewaya.Event {
+func (fake *ChaincodeEventsServer) SendArgsForCall(i int) *gateway.ChaincodeEventsResponse {
 	fake.sendMutex.RLock()
 	defer fake.sendMutex.RUnlock()
 	argsForCall := fake.sendArgsForCall[i]
 	return argsForCall.arg1
 }
 
-func (fake *SubmitServer) SendReturns(result1 error) {
+func (fake *ChaincodeEventsServer) SendReturns(result1 error) {
 	fake.sendMutex.Lock()
 	defer fake.sendMutex.Unlock()
 	fake.SendStub = nil
@@ -242,7 +245,7 @@ func (fake *SubmitServer) SendReturns(result1 error) {
 	}{result1}
 }
 
-func (fake *SubmitServer) SendReturnsOnCall(i int, result1 error) {
+func (fake *ChaincodeEventsServer) SendReturnsOnCall(i int, result1 error) {
 	fake.sendMutex.Lock()
 	defer fake.sendMutex.Unlock()
 	fake.SendStub = nil
@@ -256,44 +259,45 @@ func (fake *SubmitServer) SendReturnsOnCall(i int, result1 error) {
 	}{result1}
 }
 
-func (fake *SubmitServer) SendHeader(arg1 metadata.MD) error {
+func (fake *ChaincodeEventsServer) SendHeader(arg1 metadata.MD) error {
 	fake.sendHeaderMutex.Lock()
 	ret, specificReturn := fake.sendHeaderReturnsOnCall[len(fake.sendHeaderArgsForCall)]
 	fake.sendHeaderArgsForCall = append(fake.sendHeaderArgsForCall, struct {
 		arg1 metadata.MD
 	}{arg1})
+	stub := fake.SendHeaderStub
+	fakeReturns := fake.sendHeaderReturns
 	fake.recordInvocation("SendHeader", []interface{}{arg1})
 	fake.sendHeaderMutex.Unlock()
-	if fake.SendHeaderStub != nil {
-		return fake.SendHeaderStub(arg1)
+	if stub != nil {
+		return stub(arg1)
 	}
 	if specificReturn {
 		return ret.result1
 	}
-	fakeReturns := fake.sendHeaderReturns
 	return fakeReturns.result1
 }
 
-func (fake *SubmitServer) SendHeaderCallCount() int {
+func (fake *ChaincodeEventsServer) SendHeaderCallCount() int {
 	fake.sendHeaderMutex.RLock()
 	defer fake.sendHeaderMutex.RUnlock()
 	return len(fake.sendHeaderArgsForCall)
 }
 
-func (fake *SubmitServer) SendHeaderCalls(stub func(metadata.MD) error) {
+func (fake *ChaincodeEventsServer) SendHeaderCalls(stub func(metadata.MD) error) {
 	fake.sendHeaderMutex.Lock()
 	defer fake.sendHeaderMutex.Unlock()
 	fake.SendHeaderStub = stub
 }
 
-func (fake *SubmitServer) SendHeaderArgsForCall(i int) metadata.MD {
+func (fake *ChaincodeEventsServer) SendHeaderArgsForCall(i int) metadata.MD {
 	fake.sendHeaderMutex.RLock()
 	defer fake.sendHeaderMutex.RUnlock()
 	argsForCall := fake.sendHeaderArgsForCall[i]
 	return argsForCall.arg1
 }
 
-func (fake *SubmitServer) SendHeaderReturns(result1 error) {
+func (fake *ChaincodeEventsServer) SendHeaderReturns(result1 error) {
 	fake.sendHeaderMutex.Lock()
 	defer fake.sendHeaderMutex.Unlock()
 	fake.SendHeaderStub = nil
@@ -302,7 +306,7 @@ func (fake *SubmitServer) SendHeaderReturns(result1 error) {
 	}{result1}
 }
 
-func (fake *SubmitServer) SendHeaderReturnsOnCall(i int, result1 error) {
+func (fake *ChaincodeEventsServer) SendHeaderReturnsOnCall(i int, result1 error) {
 	fake.sendHeaderMutex.Lock()
 	defer fake.sendHeaderMutex.Unlock()
 	fake.SendHeaderStub = nil
@@ -316,44 +320,45 @@ func (fake *SubmitServer) SendHeaderReturnsOnCall(i int, result1 error) {
 	}{result1}
 }
 
-func (fake *SubmitServer) SendMsg(arg1 interface{}) error {
+func (fake *ChaincodeEventsServer) SendMsg(arg1 interface{}) error {
 	fake.sendMsgMutex.Lock()
 	ret, specificReturn := fake.sendMsgReturnsOnCall[len(fake.sendMsgArgsForCall)]
 	fake.sendMsgArgsForCall = append(fake.sendMsgArgsForCall, struct {
 		arg1 interface{}
 	}{arg1})
+	stub := fake.SendMsgStub
+	fakeReturns := fake.sendMsgReturns
 	fake.recordInvocation("SendMsg", []interface{}{arg1})
 	fake.sendMsgMutex.Unlock()
-	if fake.SendMsgStub != nil {
-		return fake.SendMsgStub(arg1)
+	if stub != nil {
+		return stub(arg1)
 	}
 	if specificReturn {
 		return ret.result1
 	}
-	fakeReturns := fake.sendMsgReturns
 	return fakeReturns.result1
 }
 
-func (fake *SubmitServer) SendMsgCallCount() int {
+func (fake *ChaincodeEventsServer) SendMsgCallCount() int {
 	fake.sendMsgMutex.RLock()
 	defer fake.sendMsgMutex.RUnlock()
 	return len(fake.sendMsgArgsForCall)
 }
 
-func (fake *SubmitServer) SendMsgCalls(stub func(interface{}) error) {
+func (fake *ChaincodeEventsServer) SendMsgCalls(stub func(interface{}) error) {
 	fake.sendMsgMutex.Lock()
 	defer fake.sendMsgMutex.Unlock()
 	fake.SendMsgStub = stub
 }
 
-func (fake *SubmitServer) SendMsgArgsForCall(i int) interface{} {
+func (fake *ChaincodeEventsServer) SendMsgArgsForCall(i int) interface{} {
 	fake.sendMsgMutex.RLock()
 	defer fake.sendMsgMutex.RUnlock()
 	argsForCall := fake.sendMsgArgsForCall[i]
 	return argsForCall.arg1
 }
 
-func (fake *SubmitServer) SendMsgReturns(result1 error) {
+func (fake *ChaincodeEventsServer) SendMsgReturns(result1 error) {
 	fake.sendMsgMutex.Lock()
 	defer fake.sendMsgMutex.Unlock()
 	fake.SendMsgStub = nil
@@ -362,7 +367,7 @@ func (fake *SubmitServer) SendMsgReturns(result1 error) {
 	}{result1}
 }
 
-func (fake *SubmitServer) SendMsgReturnsOnCall(i int, result1 error) {
+func (fake *ChaincodeEventsServer) SendMsgReturnsOnCall(i int, result1 error) {
 	fake.sendMsgMutex.Lock()
 	defer fake.sendMsgMutex.Unlock()
 	fake.SendMsgStub = nil
@@ -376,44 +381,45 @@ func (fake *SubmitServer) SendMsgReturnsOnCall(i int, result1 error) {
 	}{result1}
 }
 
-func (fake *SubmitServer) SetHeader(arg1 metadata.MD) error {
+func (fake *ChaincodeEventsServer) SetHeader(arg1 metadata.MD) error {
 	fake.setHeaderMutex.Lock()
 	ret, specificReturn := fake.setHeaderReturnsOnCall[len(fake.setHeaderArgsForCall)]
 	fake.setHeaderArgsForCall = append(fake.setHeaderArgsForCall, struct {
 		arg1 metadata.MD
 	}{arg1})
+	stub := fake.SetHeaderStub
+	fakeReturns := fake.setHeaderReturns
 	fake.recordInvocation("SetHeader", []interface{}{arg1})
 	fake.setHeaderMutex.Unlock()
-	if fake.SetHeaderStub != nil {
-		return fake.SetHeaderStub(arg1)
+	if stub != nil {
+		return stub(arg1)
 	}
 	if specificReturn {
 		return ret.result1
 	}
-	fakeReturns := fake.setHeaderReturns
 	return fakeReturns.result1
 }
 
-func (fake *SubmitServer) SetHeaderCallCount() int {
+func (fake *ChaincodeEventsServer) SetHeaderCallCount() int {
 	fake.setHeaderMutex.RLock()
 	defer fake.setHeaderMutex.RUnlock()
 	return len(fake.setHeaderArgsForCall)
 }
 
-func (fake *SubmitServer) SetHeaderCalls(stub func(metadata.MD) error) {
+func (fake *ChaincodeEventsServer) SetHeaderCalls(stub func(metadata.MD) error) {
 	fake.setHeaderMutex.Lock()
 	defer fake.setHeaderMutex.Unlock()
 	fake.SetHeaderStub = stub
 }
 
-func (fake *SubmitServer) SetHeaderArgsForCall(i int) metadata.MD {
+func (fake *ChaincodeEventsServer) SetHeaderArgsForCall(i int) metadata.MD {
 	fake.setHeaderMutex.RLock()
 	defer fake.setHeaderMutex.RUnlock()
 	argsForCall := fake.setHeaderArgsForCall[i]
 	return argsForCall.arg1
 }
 
-func (fake *SubmitServer) SetHeaderReturns(result1 error) {
+func (fake *ChaincodeEventsServer) SetHeaderReturns(result1 error) {
 	fake.setHeaderMutex.Lock()
 	defer fake.setHeaderMutex.Unlock()
 	fake.SetHeaderStub = nil
@@ -422,7 +428,7 @@ func (fake *SubmitServer) SetHeaderReturns(result1 error) {
 	}{result1}
 }
 
-func (fake *SubmitServer) SetHeaderReturnsOnCall(i int, result1 error) {
+func (fake *ChaincodeEventsServer) SetHeaderReturnsOnCall(i int, result1 error) {
 	fake.setHeaderMutex.Lock()
 	defer fake.setHeaderMutex.Unlock()
 	fake.SetHeaderStub = nil
@@ -436,38 +442,39 @@ func (fake *SubmitServer) SetHeaderReturnsOnCall(i int, result1 error) {
 	}{result1}
 }
 
-func (fake *SubmitServer) SetTrailer(arg1 metadata.MD) {
+func (fake *ChaincodeEventsServer) SetTrailer(arg1 metadata.MD) {
 	fake.setTrailerMutex.Lock()
 	fake.setTrailerArgsForCall = append(fake.setTrailerArgsForCall, struct {
 		arg1 metadata.MD
 	}{arg1})
+	stub := fake.SetTrailerStub
 	fake.recordInvocation("SetTrailer", []interface{}{arg1})
 	fake.setTrailerMutex.Unlock()
-	if fake.SetTrailerStub != nil {
+	if stub != nil {
 		fake.SetTrailerStub(arg1)
 	}
 }
 
-func (fake *SubmitServer) SetTrailerCallCount() int {
+func (fake *ChaincodeEventsServer) SetTrailerCallCount() int {
 	fake.setTrailerMutex.RLock()
 	defer fake.setTrailerMutex.RUnlock()
 	return len(fake.setTrailerArgsForCall)
 }
 
-func (fake *SubmitServer) SetTrailerCalls(stub func(metadata.MD)) {
+func (fake *ChaincodeEventsServer) SetTrailerCalls(stub func(metadata.MD)) {
 	fake.setTrailerMutex.Lock()
 	defer fake.setTrailerMutex.Unlock()
 	fake.SetTrailerStub = stub
 }
 
-func (fake *SubmitServer) SetTrailerArgsForCall(i int) metadata.MD {
+func (fake *ChaincodeEventsServer) SetTrailerArgsForCall(i int) metadata.MD {
 	fake.setTrailerMutex.RLock()
 	defer fake.setTrailerMutex.RUnlock()
 	argsForCall := fake.setTrailerArgsForCall[i]
 	return argsForCall.arg1
 }
 
-func (fake *SubmitServer) Invocations() map[string][][]interface{} {
+func (fake *ChaincodeEventsServer) Invocations() map[string][][]interface{} {
 	fake.invocationsMutex.RLock()
 	defer fake.invocationsMutex.RUnlock()
 	fake.contextMutex.RLock()
@@ -491,7 +498,7 @@ func (fake *SubmitServer) Invocations() map[string][][]interface{} {
 	return copiedInvocations
 }
 
-func (fake *SubmitServer) recordInvocation(key string, args []interface{}) {
+func (fake *ChaincodeEventsServer) recordInvocation(key string, args []interface{}) {
 	fake.invocationsMutex.Lock()
 	defer fake.invocationsMutex.Unlock()
 	if fake.invocations == nil {
@@ -502,3 +509,5 @@ func (fake *SubmitServer) recordInvocation(key string, args []interface{}) {
 	}
 	fake.invocations[key] = append(fake.invocations[key], args)
 }
+
+var _ gateway.Gateway_ChaincodeEventsServer = new(ChaincodeEventsServer)

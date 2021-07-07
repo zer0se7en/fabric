@@ -38,6 +38,19 @@ type PeerLedger struct {
 	commitLegacyReturnsOnCall map[int]struct {
 		result1 error
 	}
+	CommitNotificationsChannelStub        func(<-chan struct{}) (<-chan *ledger.CommitNotification, error)
+	commitNotificationsChannelMutex       sync.RWMutex
+	commitNotificationsChannelArgsForCall []struct {
+		arg1 <-chan struct{}
+	}
+	commitNotificationsChannelReturns struct {
+		result1 <-chan *ledger.CommitNotification
+		result2 error
+	}
+	commitNotificationsChannelReturnsOnCall map[int]struct {
+		result1 <-chan *ledger.CommitNotification
+		result2 error
+	}
 	CommitPvtDataOfOldBlocksStub        func([]*ledger.ReconciledPvtdata, ledger.MissingPvtDataInfo) ([]*ledger.PvtdataHashMismatch, error)
 	commitPvtDataOfOldBlocksMutex       sync.RWMutex
 	commitPvtDataOfOldBlocksArgsForCall []struct {
@@ -194,18 +207,20 @@ type PeerLedger struct {
 		result1 *peer.ProcessedTransaction
 		result2 error
 	}
-	GetTxValidationCodeByTxIDStub        func(string) (peer.TxValidationCode, error)
+	GetTxValidationCodeByTxIDStub        func(string) (peer.TxValidationCode, uint64, error)
 	getTxValidationCodeByTxIDMutex       sync.RWMutex
 	getTxValidationCodeByTxIDArgsForCall []struct {
 		arg1 string
 	}
 	getTxValidationCodeByTxIDReturns struct {
 		result1 peer.TxValidationCode
-		result2 error
+		result2 uint64
+		result3 error
 	}
 	getTxValidationCodeByTxIDReturnsOnCall map[int]struct {
 		result1 peer.TxValidationCode
-		result2 error
+		result2 uint64
+		result3 error
 	}
 	NewHistoryQueryExecutorStub        func() (ledger.HistoryQueryExecutor, error)
 	newHistoryQueryExecutorMutex       sync.RWMutex
@@ -426,6 +441,69 @@ func (fake *PeerLedger) CommitLegacyReturnsOnCall(i int, result1 error) {
 	fake.commitLegacyReturnsOnCall[i] = struct {
 		result1 error
 	}{result1}
+}
+
+func (fake *PeerLedger) CommitNotificationsChannel(arg1 <-chan struct{}) (<-chan *ledger.CommitNotification, error) {
+	fake.commitNotificationsChannelMutex.Lock()
+	ret, specificReturn := fake.commitNotificationsChannelReturnsOnCall[len(fake.commitNotificationsChannelArgsForCall)]
+	fake.commitNotificationsChannelArgsForCall = append(fake.commitNotificationsChannelArgsForCall, struct {
+		arg1 <-chan struct{}
+	}{arg1})
+	fake.recordInvocation("CommitNotificationsChannel", []interface{}{arg1})
+	fake.commitNotificationsChannelMutex.Unlock()
+	if fake.CommitNotificationsChannelStub != nil {
+		return fake.CommitNotificationsChannelStub(arg1)
+	}
+	if specificReturn {
+		return ret.result1, ret.result2
+	}
+	fakeReturns := fake.commitNotificationsChannelReturns
+	return fakeReturns.result1, fakeReturns.result2
+}
+
+func (fake *PeerLedger) CommitNotificationsChannelCallCount() int {
+	fake.commitNotificationsChannelMutex.RLock()
+	defer fake.commitNotificationsChannelMutex.RUnlock()
+	return len(fake.commitNotificationsChannelArgsForCall)
+}
+
+func (fake *PeerLedger) CommitNotificationsChannelCalls(stub func(<-chan struct{}) (<-chan *ledger.CommitNotification, error)) {
+	fake.commitNotificationsChannelMutex.Lock()
+	defer fake.commitNotificationsChannelMutex.Unlock()
+	fake.CommitNotificationsChannelStub = stub
+}
+
+func (fake *PeerLedger) CommitNotificationsChannelArgsForCall(i int) <-chan struct{} {
+	fake.commitNotificationsChannelMutex.RLock()
+	defer fake.commitNotificationsChannelMutex.RUnlock()
+	argsForCall := fake.commitNotificationsChannelArgsForCall[i]
+	return argsForCall.arg1
+}
+
+func (fake *PeerLedger) CommitNotificationsChannelReturns(result1 <-chan *ledger.CommitNotification, result2 error) {
+	fake.commitNotificationsChannelMutex.Lock()
+	defer fake.commitNotificationsChannelMutex.Unlock()
+	fake.CommitNotificationsChannelStub = nil
+	fake.commitNotificationsChannelReturns = struct {
+		result1 <-chan *ledger.CommitNotification
+		result2 error
+	}{result1, result2}
+}
+
+func (fake *PeerLedger) CommitNotificationsChannelReturnsOnCall(i int, result1 <-chan *ledger.CommitNotification, result2 error) {
+	fake.commitNotificationsChannelMutex.Lock()
+	defer fake.commitNotificationsChannelMutex.Unlock()
+	fake.CommitNotificationsChannelStub = nil
+	if fake.commitNotificationsChannelReturnsOnCall == nil {
+		fake.commitNotificationsChannelReturnsOnCall = make(map[int]struct {
+			result1 <-chan *ledger.CommitNotification
+			result2 error
+		})
+	}
+	fake.commitNotificationsChannelReturnsOnCall[i] = struct {
+		result1 <-chan *ledger.CommitNotification
+		result2 error
+	}{result1, result2}
 }
 
 func (fake *PeerLedger) CommitPvtDataOfOldBlocks(arg1 []*ledger.ReconciledPvtdata, arg2 ledger.MissingPvtDataInfo) ([]*ledger.PvtdataHashMismatch, error) {
@@ -1173,7 +1251,7 @@ func (fake *PeerLedger) GetTransactionByIDReturnsOnCall(i int, result1 *peer.Pro
 	}{result1, result2}
 }
 
-func (fake *PeerLedger) GetTxValidationCodeByTxID(arg1 string) (peer.TxValidationCode, error) {
+func (fake *PeerLedger) GetTxValidationCodeByTxID(arg1 string) (peer.TxValidationCode, uint64, error) {
 	fake.getTxValidationCodeByTxIDMutex.Lock()
 	ret, specificReturn := fake.getTxValidationCodeByTxIDReturnsOnCall[len(fake.getTxValidationCodeByTxIDArgsForCall)]
 	fake.getTxValidationCodeByTxIDArgsForCall = append(fake.getTxValidationCodeByTxIDArgsForCall, struct {
@@ -1185,10 +1263,10 @@ func (fake *PeerLedger) GetTxValidationCodeByTxID(arg1 string) (peer.TxValidatio
 		return fake.GetTxValidationCodeByTxIDStub(arg1)
 	}
 	if specificReturn {
-		return ret.result1, ret.result2
+		return ret.result1, ret.result2, ret.result3
 	}
 	fakeReturns := fake.getTxValidationCodeByTxIDReturns
-	return fakeReturns.result1, fakeReturns.result2
+	return fakeReturns.result1, fakeReturns.result2, fakeReturns.result3
 }
 
 func (fake *PeerLedger) GetTxValidationCodeByTxIDCallCount() int {
@@ -1197,7 +1275,7 @@ func (fake *PeerLedger) GetTxValidationCodeByTxIDCallCount() int {
 	return len(fake.getTxValidationCodeByTxIDArgsForCall)
 }
 
-func (fake *PeerLedger) GetTxValidationCodeByTxIDCalls(stub func(string) (peer.TxValidationCode, error)) {
+func (fake *PeerLedger) GetTxValidationCodeByTxIDCalls(stub func(string) (peer.TxValidationCode, uint64, error)) {
 	fake.getTxValidationCodeByTxIDMutex.Lock()
 	defer fake.getTxValidationCodeByTxIDMutex.Unlock()
 	fake.GetTxValidationCodeByTxIDStub = stub
@@ -1210,30 +1288,33 @@ func (fake *PeerLedger) GetTxValidationCodeByTxIDArgsForCall(i int) string {
 	return argsForCall.arg1
 }
 
-func (fake *PeerLedger) GetTxValidationCodeByTxIDReturns(result1 peer.TxValidationCode, result2 error) {
+func (fake *PeerLedger) GetTxValidationCodeByTxIDReturns(result1 peer.TxValidationCode, result2 uint64, result3 error) {
 	fake.getTxValidationCodeByTxIDMutex.Lock()
 	defer fake.getTxValidationCodeByTxIDMutex.Unlock()
 	fake.GetTxValidationCodeByTxIDStub = nil
 	fake.getTxValidationCodeByTxIDReturns = struct {
 		result1 peer.TxValidationCode
-		result2 error
-	}{result1, result2}
+		result2 uint64
+		result3 error
+	}{result1, result2, result3}
 }
 
-func (fake *PeerLedger) GetTxValidationCodeByTxIDReturnsOnCall(i int, result1 peer.TxValidationCode, result2 error) {
+func (fake *PeerLedger) GetTxValidationCodeByTxIDReturnsOnCall(i int, result1 peer.TxValidationCode, result2 uint64, result3 error) {
 	fake.getTxValidationCodeByTxIDMutex.Lock()
 	defer fake.getTxValidationCodeByTxIDMutex.Unlock()
 	fake.GetTxValidationCodeByTxIDStub = nil
 	if fake.getTxValidationCodeByTxIDReturnsOnCall == nil {
 		fake.getTxValidationCodeByTxIDReturnsOnCall = make(map[int]struct {
 			result1 peer.TxValidationCode
-			result2 error
+			result2 uint64
+			result3 error
 		})
 	}
 	fake.getTxValidationCodeByTxIDReturnsOnCall[i] = struct {
 		result1 peer.TxValidationCode
-		result2 error
-	}{result1, result2}
+		result2 uint64
+		result3 error
+	}{result1, result2, result3}
 }
 
 func (fake *PeerLedger) NewHistoryQueryExecutor() (ledger.HistoryQueryExecutor, error) {
@@ -1596,6 +1677,8 @@ func (fake *PeerLedger) Invocations() map[string][][]interface{} {
 	defer fake.closeMutex.RUnlock()
 	fake.commitLegacyMutex.RLock()
 	defer fake.commitLegacyMutex.RUnlock()
+	fake.commitNotificationsChannelMutex.RLock()
+	defer fake.commitNotificationsChannelMutex.RUnlock()
 	fake.commitPvtDataOfOldBlocksMutex.RLock()
 	defer fake.commitPvtDataOfOldBlocksMutex.RUnlock()
 	fake.doesPvtDataInfoExistMutex.RLock()

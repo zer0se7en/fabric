@@ -46,11 +46,11 @@ To view the help and available commands for the download script, please use the 
 curl -sSL https://bit.ly/2ysbOFE | bash -s -- -h
 ```
 
-To download a specific release, pass a version identifier for Fabric and Fabric CA Docker images. The command below demonstrates how to download the latest production releases - `Fabric v2.3.1` and `Fabric CA v1.4.9` 
+To download a specific release, pass a version identifier for Fabric and Fabric CA Docker images. The command below demonstrates how to download the latest production releases - `Fabric v2.3.2` and `Fabric CA v1.5.0` 
 
 ```shell
 curl -sSL https://bit.ly/2ysbOFE | bash -s -- <fabric_version> <fabric-ca_version>
-curl -sSL https://bit.ly/2ysbOFE | bash -s -- 2.3.1 1.4.9
+curl -sSL https://bit.ly/2ysbOFE | bash -s -- 2.3.2 1.5.0
 ```
 
 ## Notes
@@ -76,7 +76,7 @@ If using another directory, please consult the Docker documentation for [file sh
   * You may have too old a version of cURL that does not handle redirects or an unsupported environment. Please make sure you use a newer version from the [cURL downloads page](https://curl.haxx.se/download.html)
   * Alternately, there might be an issue with the bit.ly, please retry the command with the un-shortened URL:
   ```shell
-  curl -sSL https://raw.githubusercontent.com/hyperledger/fabric/master/scripts/bootstrap.sh| bash -s 
+  curl -sSL https://raw.githubusercontent.com/hyperledger/fabric/main/scripts/bootstrap.sh| bash -s 
   ```
 
 * If you need help, post your questions and share your logs on the **fabric-questions** channel on [Hyperledger Rocket Chat](https://chat.hyperledger.org/home) or on [StackOverflow](https://stackoverflow.com/questions/tagged/hyperledger-fabric).

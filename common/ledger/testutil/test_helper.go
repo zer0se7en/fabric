@@ -56,6 +56,7 @@ type TxDetails struct {
 	TxID                            string
 	ChaincodeName, ChaincodeVersion string
 	SimulationResults               []byte
+	ChaincodeEvents                 []byte
 	Type                            common.HeaderType
 }
 
@@ -171,7 +172,7 @@ func ConstructTransactionFromTxDetails(txDetails *TxDetails, sign bool) (*common
 			nil,
 			txDetails.SimulationResults,
 			txDetails.TxID,
-			nil,
+			txDetails.ChaincodeEvents,
 			nil,
 			txDetails.Type,
 		)
@@ -182,7 +183,7 @@ func ConstructTransactionFromTxDetails(txDetails *TxDetails, sign bool) (*common
 			nil,
 			txDetails.SimulationResults,
 			txDetails.TxID,
-			nil,
+			txDetails.ChaincodeEvents,
 			nil,
 			txDetails.Type,
 		)
@@ -441,7 +442,7 @@ func ConstructSignedTxEnv(
 		prop.Payload,
 		pResponse,
 		simulationResults,
-		nil,
+		events,
 		ccid,
 		signer,
 	)
@@ -460,7 +461,7 @@ func SetTxID(t *testing.T, block *common.Block, txNum int, txID string) {
 	envelopeBytes := block.Data.Data[txNum]
 	envelope, err := protoutil.UnmarshalEnvelope(envelopeBytes)
 	if err != nil {
-		t.Fatalf("error unmarshaling envelope: %s", err)
+		t.Fatalf("error unmarshalling envelope: %s", err)
 	}
 
 	payload, err := protoutil.UnmarshalPayload(envelope.Payload)
@@ -470,7 +471,7 @@ func SetTxID(t *testing.T, block *common.Block, txNum int, txID string) {
 
 	channelHeader, err := protoutil.UnmarshalChannelHeader(payload.Header.ChannelHeader)
 	if err != nil {
-		t.Fatalf("error unmarshaling channel header: %s", err)
+		t.Fatalf("error unmarshalling channel header: %s", err)
 	}
 	channelHeader.TxId = txID
 	channelHeaderBytes, err := proto.Marshal(channelHeader)
